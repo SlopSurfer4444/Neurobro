@@ -1,0 +1,55 @@
+{
+  "name": "openclaw-guarded-mtproto-ingestor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Telegram user-account gateway with scoped tools, bounded context and durable operation records.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "packageManager": "npm@11.12.1",
+  "exports": {
+    "./wsl-broker/snapshot": {
+      "types": "./dist/src/wsl-broker-snapshot.d.ts",
+      "default": "./dist/src/wsl-broker-snapshot.js"
+    },
+    "./wsl-broker/host": {
+      "types": "./dist/src/wsl-broker-host.d.ts",
+      "default": "./dist/src/wsl-broker-host.js"
+    },
+    "./wsl-broker/guest": {
+      "types": "./dist/src/wsl-broker-guest.d.ts",
+      "default": "./dist/src/wsl-broker-guest.js"
+    },
+    "./wsl-broker/contract": {
+      "types": "./dist/src/wsl-broker-contract.d.ts",
+      "default": "./dist/src/wsl-broker-contract.js"
+    },
+    "./api": {
+      "types": "./dist/src/api/index.d.ts",
+      "default": "./dist/src/api/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test --test-concurrency=4 dist/test/*.test.js",
+    "test:wsl-broker": "npm run build && node --test dist/test/wsl-broker-contract.test.js dist/test/wsl-broker-surface.test.js dist/test/wsl-broker-snapshot.test.js",
+    "doctor": "npm run build --silent && node dist/src/cli.js doctor",
+    "auth": "npm run build --silent && node dist/src/cli.js auth",
+    "probe": "npm run build --silent && node dist/src/cli.js probe",
+    "discover": "npm run build --silent && node dist/src/cli.js discover",
+    "find-dialog": "npm run build --silent && node dist/src/cli.js find-dialog",
+    "export-range": "npm run build --silent && node dist/src/cli.js export-range",
+    "view-export": "npm run build --silent && node dist/src/cli.js view-export",
+    "purge-expired": "npm run build --silent && node dist/src/cli.js purge-expired",
+    "sync": "npm run build --silent && node dist/src/cli.js sync",
+    "watch": "npm run build --silent && node dist/src/cli.js watch"
+  },
+  "dependencies": {
+    "telegram": "2.26.22"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "5.9.3"
+  }
+}

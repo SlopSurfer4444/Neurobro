@@ -1,0 +1,56 @@
+[package]
+name = "rm0032-phase3-native-observer-launcher-v1"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "rm0032-phase3-native-observer-launcher-v1"
+path = "src/main.rs"
+
+[[bin]]
+name = "phase3-prestart-v1"
+path = "src/bin/phase3-prestart-v1.rs"
+
+[dependencies]
+base64 = "=0.22.1"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+sha2 = "=0.10.9"
+windows-sys = { version = "=0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_NetworkManagement_WindowsFirewall",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Security_Isolation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_Console",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Environment",
+  "Win32_System_IO",
+  "Win32_System_Ioctl",
+  "Win32_System_JobObjects",
+  "Win32_System_Memory",
+  "Win32_System_Pipes",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+  "Win32_UI_Shell",
+] }
+
+[[test]]
+name = "launcher-contract-vectors"
+path = "tests/launcher-contract-vectors.rs"
+harness = false
+
+[[test]]
+name = "prestart-contract-vectors"
+path = "tests/prestart-contract-vectors.rs"
+
+[[test]]
+name = "prestart-windows-native"
+path = "tests/prestart-windows-native.rs"
+
+[[test]]
+name = "launcher-windows-security"
+path = "tests/launcher-windows-security.rs"

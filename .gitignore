@@ -1,0 +1,17 @@
+**/node_modules/
+**/dist/
+**/target/
+**/__pycache__/
+**/coverage/
+.env
+.env.*
+!*.example
+*.session*
+*.enc
+runtime/
+data/
+*.log
+**/config-account*.json
+**/config.local.json
+**/config.json
+**/exports/

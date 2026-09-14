@@ -1,0 +1,27 @@
+[package]
+name = "rm0032-phase3-native-observer-v1"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "rm0032-phase3-native-observer-v1"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "=0.22.1"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+sha2 = "=0.10.9"
+windows-sys = { version = "=0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Ioctl",
+] }
+
+[[test]]
+name = "observer-contract-vectors"
+path = "tests/observer-contract-vectors.rs"
+harness = false

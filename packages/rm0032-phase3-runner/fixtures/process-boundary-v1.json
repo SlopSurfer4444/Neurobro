@@ -1,0 +1,152 @@
+{
+  "schema": "decadans.rm0032.process-contract-vectors.v1",
+  "vectors": [
+    {
+      "name": "canonical-echo",
+      "canonicalRequestBytes": 1113,
+      "canonicalRequestSha256": "3b7f12b3dedf2d1e72aca90e49d196d8113430d08b94159dec859a59cb193929",
+      "request": {
+        "schema": "decadans.rm0032.process-request.v1",
+        "operationId": "11111111-1111-4111-8111-111111111111",
+        "oneShot": true,
+        "retryAuthorized": false,
+        "executable": {
+          "path": "C:\\fixtures\\rm0032-phase3-runner.exe",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "argv": ["fixture", "echo"],
+        "stdin": {
+          "encoding": "base64",
+          "base64": "dHJhY2VyLWJ1bGxldA==",
+          "bytes": 13,
+          "sha256": "5bda75cbbe279e397253d94c5e25d69b01c84d5d75b05098b537e5747f6d8dc8"
+        },
+        "environment": {
+          "inherit": false,
+          "allowlist": [],
+          "values": {}
+        },
+        "limits": {
+          "requestBytesMax": 65536,
+          "stdinBytesMax": 262144,
+          "stdoutBytesMax": 1048576,
+          "stderrBytesMax": 1048576,
+          "evidenceBytesMax": 3145728,
+          "concurrencyMax": 1,
+          "childProcessMax": 1,
+          "deadlineMs": 5000,
+          "aggregateDeadlineMs": 420000,
+          "memoryBytesMax": 268435456,
+          "cpuPercentMax": 25
+        },
+        "containment": {
+          "consumer": "phase-3-wsl-hardening-coordinator",
+          "operationRoot": "C:\\fixtures\\rm0032",
+          "requireCanonicalPaths": true
+        },
+        "attemptMarker": {
+          "path": "C:\\fixtures\\rm0032\\attempt.marker",
+          "createNew": true
+        },
+        "evidence": {
+          "path": "C:\\fixtures\\rm0032\\evidence.json",
+          "schema": "decadans.rm0032.process-evidence.v1",
+          "createNew": true
+        }
+      },
+      "evidence": {
+        "schema": "decadans.rm0032.process-evidence.v1",
+        "requestBytes": 1113,
+        "requestSha256": "3b7f12b3dedf2d1e72aca90e49d196d8113430d08b94159dec859a59cb193929",
+        "executableSha256Observed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "argv": ["fixture", "echo"],
+        "stdinBytes": 13,
+        "stdinSha256": "5bda75cbbe279e397253d94c5e25d69b01c84d5d75b05098b537e5747f6d8dc8",
+        "startedUtc": "2026-08-27T00:00:00.000Z",
+        "finishedUtc": "2026-08-27T00:00:00.010Z",
+        "processStartCount": 1,
+        "terminalState": "known-exit",
+        "exitCodeKnown": true,
+        "exitCode": 0,
+        "outputComplete": true,
+        "standardOutput": {
+          "base64": "dHJhY2VyLWJ1bGxldA==",
+          "bytes": 13,
+          "sha256": "5bda75cbbe279e397253d94c5e25d69b01c84d5d75b05098b537e5747f6d8dc8",
+          "complete": true,
+          "truncated": false
+        },
+        "standardError": {
+          "base64": "Zml4dHVyZS1zdGRlcnI=",
+          "bytes": 14,
+          "sha256": "510ce5870b1e023349550dbfb10c1ddb3dd060c3cd0a5f3bbd85a4503671d5eb",
+          "complete": true,
+          "truncated": false
+        },
+        "retryPerformed": false,
+        "cleanupPerformed": false
+      }
+    }
+  ],
+  "refusalVectors": [
+    {
+      "name": "version-drift",
+      "action": "replace",
+      "path": ["schema"],
+      "value": "decadans.rm0032.process-request.v2"
+    },
+    {
+      "name": "retry-authority",
+      "action": "replace",
+      "path": ["retryAuthorized"],
+      "value": true
+    },
+    {
+      "name": "consumer-drift",
+      "action": "replace",
+      "path": ["containment", "consumer"],
+      "value": "another-consumer"
+    },
+    {
+      "name": "empty-argv",
+      "action": "replace",
+      "path": ["argv"],
+      "value": []
+    },
+    {
+      "name": "stdin-hash-drift",
+      "action": "replace",
+      "path": ["stdin", "sha256"],
+      "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "name": "limit-drift",
+      "action": "replace",
+      "path": ["limits", "stdoutBytesMax"],
+      "value": 1048575
+    },
+    {
+      "name": "extra-property",
+      "action": "add",
+      "path": ["unexpected"],
+      "value": true
+    },
+    {
+      "name": "missing-executable",
+      "action": "remove",
+      "path": ["executable"]
+    },
+    {
+      "name": "marker-escape",
+      "action": "replace",
+      "path": ["attemptMarker", "path"],
+      "value": "C:\\fixtures\\escape.marker"
+    },
+    {
+      "name": "path-normalization-drift",
+      "action": "replace",
+      "path": ["executable", "path"],
+      "value": "C:\\fixtures\\\\rm0032-phase3-runner.exe"
+    }
+  ]
+}

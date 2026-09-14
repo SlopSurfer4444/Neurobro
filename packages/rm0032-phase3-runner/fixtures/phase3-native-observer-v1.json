@@ -1,0 +1,393 @@
+{
+  "schema": "decadans.rm0032.phase3-native-observer-fixture.v1",
+  "version": "v1",
+  "protocolLiterals": {
+    "fixtureSchema": "decadans.rm0032.phase3-native-observer-fixture.v1",
+    "requestSchema": "decadans.rm0032.native-observer-request.v1",
+    "observationSchema": "decadans.rm0032.native-observer-observation.v1",
+    "acknowledgmentSchema": "decadans.rm0032.native-observer-ack.v1",
+    "preObservationRefusalSchema": "decadans.rm0032.native-observer-pre-observation-refusal.v1",
+    "terminalFailureSchema": "decadans.rm0032.native-observer-terminal-failure.v1",
+    "version": "v1",
+    "consumer": "rm-0032-phase3-hardening-coordinator",
+    "cliMode": "observe-v1",
+    "stdinFraming": "one-canonical-request-then-EOF",
+    "successStdoutFraming": "one-canonical-observation-0x0A-one-canonical-acknowledgment-then-EOF",
+    "terminalStdoutFraming": "one-canonical-terminal-then-EOF",
+    "recognizedExitCode": 0,
+    "reservedUnableToEmitExitCode": 64
+  },
+  "knownAnswerTests": [
+    {
+      "name": "canonical-read-request",
+      "canonicalUtf8Base64": "eyJjb25zdW1lciI6InJtLTAwMzItcGhhc2UzLWhhcmRlbmluZy1jb29yZGluYXRvciIsIm9wZXJhdGlvbiI6InJlYWQtYm91bmQtZmlsZSIsInJlcXVlc3RJZCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInJvb3RQYXRoIjoiQzpcXGZpeHR1cmVzXFxybTAwMzIiLCJzY2hlbWEiOiJkZWNhZGFucy5ybTAwMzIubmF0aXZlLW9ic2VydmVyLXJlcXVlc3QudjEiLCJ0YXJnZXRQYXRoIjoiQzpcXGZpeHR1cmVzXFxybTAwMzJcXGJvdW5kLnR4dCIsInZlcnNpb24iOiJ2MSJ9",
+      "bytes": 282,
+      "sha256": "1ed970951232c1be26a4d00dbb11ec352d9fae5a0876a9bd4a1b357c259eff01"
+    },
+    {
+      "name": "tracer-create-new-request",
+      "canonicalUtf8Base64": "eyJjb25zdW1lciI6InJtLTAwMzItcGhhc2UzLWhhcmRlbmluZy1jb29yZGluYXRvciIsImNvbnRlbnRCYXNlNjQiOiJkSEpoWTJWeUxXSjFiR3hsZEE9PSIsIm9wZXJhdGlvbiI6ImNyZWF0ZS1uZXctZHVyYWJsZS1maWxlIiwicmVxdWVzdElkIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicm9vdFBhdGgiOiJDOlxcZml4dHVyZXNcXHJtMDAzMiIsInNjaGVtYSI6ImRlY2FkYW5zLnJtMDAzMi5uYXRpdmUtb2JzZXJ2ZXItcmVxdWVzdC52MSIsInRhcmdldFBhdGgiOiJDOlxcZml4dHVyZXNcXHJtMDAzMlxcYm91bmQudHh0IiwidmVyc2lvbiI6InYxIn0=",
+      "bytes": 329,
+      "sha256": "cb3ae1caacb17af1f43c24b88683b134c47701102198f0a27fc4dde45f2f6faa"
+    }
+  ],
+  "limits": {
+    "readRequestUtf8BytesMax": 65536,
+    "createNewRequestUtf8BytesMax": 393216,
+    "stdinUtf8BytesMax": 393216,
+    "boundFileBytesMax": 262144,
+    "createNewContentBytesMax": 262144,
+    "observationUtf8BytesMax": 1048576,
+    "ackUtf8BytesMax": 65536,
+    "terminalUtf8BytesMax": 65536,
+    "successStdoutUtf8BytesMax": 1114113,
+    "terminalStdoutUtf8BytesMax": 65536,
+    "stderrBytesMax": 0,
+    "durableEvidenceUtf8BytesMax": 1048576,
+    "pathUtf8BytesMax": 1024,
+    "operationDeadlineMsMax": 10000,
+    "aggregateDeadlineMsMax": 15000,
+    "observerInvocationCountMax": 1,
+    "workingSetBytesMax": 67108864,
+    "jobMemoryBytesMax": 134217728,
+    "cpuHardCapPercent": 25,
+    "concurrency": 1,
+    "threadCountMax": 4,
+    "childProcessCountMax": 0,
+    "base64OfMaxContentBytes": 349528,
+    "createNewMaxEnvelopeUtf8Bytes": 353882,
+    "capAlgebra": "base64(262144)=349528-and-fixed-uuid-plus-two-escaped-1024-byte-paths-envelope<=353882<=393216"
+  },
+  "groups": [
+    {
+      "id": "canonical",
+      "vectors": [
+        {
+          "knownAnswerNames": ["canonical-read-request", "tracer-create-new-request"],
+          "wireKnownAnswerTests": [
+
+            {
+              "name": "read-known-success-frame",
+              "canonicalUtf8Base64": "eyJjb25zdW1lciI6InJtLTAwMzItcGhhc2UzLWhhcmRlbmluZy1jb29yZGluYXRvciIsImNvbnRlbnRCYXNlNjQiOiJkSEpoWTJWeUxXSjFiR3hsZEE9PSIsImNvbnRlbnRTaGEyNTYiOiI1YmRhNzVjYmJlMjc5ZTM5NzI1M2Q5NGM1ZTI1ZDY5YjAxYzg0ZDVkNzViMDUwOThiNTM3ZTU3NDdmNmQ4ZGM4IiwiaWRlbnRpdHlBZnRlciI6eyJmaWxlQXR0cmlidXRlcyI6IjAwMDAwMDgwIiwiZmlsZUlkIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYiLCJmaW5hbFBhdGgiOiJcXFxcP1xcQzpcXGZpeHR1cmVzXFxybTAwMzJcXGJvdW5kLnR4dCIsImxhc3RXcml0ZVRpbWUiOiIwIiwic2l6ZSI6IjEzIiwidm9sdW1lU2VyaWFsTnVtYmVyIjoiMDEyMzQ1Njc4OWFiY2RlZiJ9LCJpZGVudGl0eUJlZm9yZSI6eyJmaWxlQXR0cmlidXRlcyI6IjAwMDAwMDgwIiwiZmlsZUlkIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYiLCJmaW5hbFBhdGgiOiJcXFxcP1xcQzpcXGZpeHR1cmVzXFxybTAwMzJcXGJvdW5kLnR4dCIsImxhc3RXcml0ZVRpbWUiOiIwIiwic2l6ZSI6IjEzIiwidm9sdW1lU2VyaWFsTnVtYmVyIjoiMDEyMzQ1Njc4OWFiY2RlZiJ9LCJvcGVyYXRpb24iOiJyZWFkLWJvdW5kLWZpbGUiLCJyZXF1ZXN0SWQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJyZXF1ZXN0U2hhMjU2IjoiMWVkOTcwOTUxMjMyYzFiZTI2YTRkMDBkYmIxMWVjMzUyZDlmYWU1YTA4NzZhOWJkNGExYjM1N2MyNTllZmYwMSIsInNjaGVtYSI6ImRlY2FkYW5zLnJtMDAzMi5uYXRpdmUtb2JzZXJ2ZXItb2JzZXJ2YXRpb24udjEiLCJ2ZXJzaW9uIjoidjEifQp7ImNvbnN1bWVyIjoicm0tMDAzMi1waGFzZTMtaGFyZGVuaW5nLWNvb3JkaW5hdG9yIiwib2JzZXJ2YXRpb25TaGEyNTYiOiJmNjFiNmZkNjkzZTRkM2ZiNjUxNDZhYzEzOWVhMzY1OTBhNTA1OTgzNDdiMmU1ZmJmN2QxNDU0YTQ5MTEyZDYzIiwib2JzZXJ2YXRpb25VdGY4Qnl0ZXMiOjg0MSwib3BlcmF0aW9uIjoicmVhZC1ib3VuZC1maWxlIiwib3V0Y29tZSI6Imtub3duIiwicmVxdWVzdElkIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicmVxdWVzdFNoYTI1NiI6IjFlZDk3MDk1MTIzMmMxYmUyNmE0ZDAwZGJiMTFlYzM1MmQ5ZmFlNWEwODc2YTliZDRhMWIzNTdjMjU5ZWZmMDEiLCJzY2hlbWEiOiJkZWNhZGFucy5ybTAwMzIubmF0aXZlLW9ic2VydmVyLWFjay52MSIsInZlcnNpb24iOiJ2MSJ9",
+              "bytes": 1254,
+              "sha256": "0fd2deae10d851fa969f8b893e361eb357caeccad4d367c0f3104f2965bdab6c"
+            },
+            {
+              "name": "read-correlated-refusal-terminal",
+              "canonicalUtf8Base64": "eyJjb25zdW1lciI6InJtLTAwMzItcGhhc2UzLWhhcmRlbmluZy1jb29yZGluYXRvciIsImVmZmVjdFN0YXRlIjoibm9uZSIsImZhaWx1cmVTdGFnZSI6InJlYWQtb2JzZXJ2YXRpb24iLCJvcGVyYXRpb24iOiJyZWFkLWJvdW5kLWZpbGUiLCJvdXRjb21lIjoicmVmdXNlZCIsInJlcXVlc3RJZCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInJlcXVlc3RTaGEyNTYiOiIxZWQ5NzA5NTEyMzJjMWJlMjZhNGQwMGRiYjExZWMzNTJkOWZhZTVhMDg3NmE5YmQ0YTFiMzU3YzI1OWVmZjAxIiwic2NoZW1hIjoiZGVjYWRhbnMucm0wMDMyLm5hdGl2ZS1vYnNlcnZlci10ZXJtaW5hbC1mYWlsdXJlLnYxIiwidmVyc2lvbiI6InYxIn0=",
+              "bytes": 368,
+              "sha256": "48a5cd0e813f5988e7184a8d6022f3e57c7515140c33516b34b04ba817943de9"
+            }
+          ],
+          "canonicalPropertyOrder": "UTF-8-byte-lexicographic",
+          "admittedEscapes": ["quote", "reverse-solidus"],
+          "admittedNumberDomain": "safe-integer-excluding-negative-zero"
+        }
+      ],
+      "hostileDescriptors": [
+        { "id": "duplicate-property", "utf8Base64": "eyJhIjoxLCJhIjoxfQ==" },
+        { "id": "unicode-escape", "utf8Base64": "eyJjb25zdW1lciI6InhcdTAwNzkifQ==" },
+        { "id": "trailing-lf", "utf8Base64": "e30K" },
+        { "id": "fraction", "utf8Base64": "eyJhIjoxLjB9" },
+        { "id": "negative-zero", "utf8Base64": "eyJhIjotMH0=" },
+        { "id": "unsafe-integer", "utf8Base64": "eyJhIjo5MDA3MTk5MjU0NzQwOTkyfQ==" },
+        { "id": "malformed-utf8", "hex": "ff" },
+        { "id": "utf8-bom", "hex": "efbbbf7b7d" },
+        { "id": "control-scalar", "hex": "7b2261223a2201227d" },
+        { "id": "oversized-read-request", "bytes": 65537 },
+        { "id": "extra-request-schema-field", "mutation": "add-extra-field" }
+      ]
+    },
+    {
+      "id": "scalar",
+      "vectors": [
+        {
+          "requestId": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "base64": ["", "dHJhY2VyLWJ1bGxldA=="],
+          "rootPath": "C:\\fixtures\\rm0032",
+          "targetPath": "C:\\fixtures\\rm0032\\bound.txt",
+          "trustedRootFinalPath": "\\\\?\\C:\\fixtures\\rm0032",
+          "trustedTargetFinalPath": "\\\\?\\C:\\fixtures\\rm0032\\bound.txt"
+        },
+        {
+          "invalidInputPaths": [
+            "c:\\fixtures\\rm0032",
+            "\\\\server\\share\\bound.txt",
+            "\\\\?\\C:\\fixtures\\bound.txt",
+            "C:\\fixtures\\rm0032\\\\bound.txt",
+            "C:\\fixtures\\rm0032\\.\\bound.txt",
+            "C:\\fixtures\\rm0032\\..\\bound.txt",
+            "C:\\fixtures\\rm0032\\bound.txt:stream",
+            "C:\\fixtures\\rm0032\\CON",
+            "C:\\fixtures\\rm0032\\con.txt",
+            "C:\\fixtures\\rm0032\\PRN",
+            "C:\\fixtures\\rm0032\\AUX",
+            "C:\\fixtures\\rm0032\\NUL",
+            "C:\\fixtures\\rm0032\\CLOCK$",
+            "C:\\fixtures\\rm0032\\CONIN$",
+            "C:\\fixtures\\rm0032\\conout$.txt",
+            "C:\\fixtures\\rm0032\\COM1",
+            "C:\\fixtures\\rm0032\\LPT9.txt",
+            "C:\\fixtures\\rm0032\\COM¹",
+            "C:\\fixtures\\rm0032\\COM²",
+            "C:\\fixtures\\rm0032\\COM³",
+            "C:\\fixtures\\rm0032\\LPT¹",
+            "C:\\fixtures\\rm0032\\LPT²",
+            "C:\\fixtures\\rm0032\\LPT³",
+            "C:\\fixtures\\rm0032\\bound.txt.",
+            "C:\\fixtures\\rm0032\\bound.txt ",
+            "C:\\fixtures\\rm0032\\bad<name",
+            "C:\\fixtures\\rm0032\\bad>name",
+            "C:\\fixtures\\rm0032\\bad\"name",
+            "C:\\fixtures\\rm0032\\bad|name",
+            "C:\\fixtures\\rm0032\\bad?name",
+            "C:\\fixtures\\rm0032\\bad*name"
+          ],
+          "validLookalikePaths": [
+            "C:\\fixtures\\rm0032\\CONX",
+            "C:\\fixtures\\rm0032\\CONIN$X",
+            "C:\\fixtures\\rm0032\\CONIN＄",
+            "C:\\fixtures\\rm0032\\CONOUT$X",
+            "C:\\fixtures\\rm0032\\CONOUT＿",
+            "C:\\fixtures\\rm0032\\COM10",
+            "C:\\fixtures\\rm0032\\COM１",
+            "C:\\fixtures\\rm0032\\COM¹X",
+            "C:\\fixtures\\rm0032\\CОN",
+            "C:\\fixtures\\rm0032\\ＣＯＮ",
+            "C:\\fixtures\\rm0032\\conın$"
+          ]
+        }
+      ],
+      "hostileDescriptors": [
+        { "id": "request-id-lowercase" },
+        { "id": "sha256-uppercase" },
+        { "id": "base64-noncanonical" },
+        { "id": "path-escape" },
+        { "id": "path-unc" },
+        { "id": "path-ads" },
+        { "id": "path-device" },
+        { "id": "path-reserved" },
+        { "id": "path-reserved-superscript" },
+        { "id": "path-trailing-dot" },
+        { "id": "path-console-device" },
+        { "id": "path-illegal-component-char" },
+        { "id": "final-path-dot-component" },
+        { "id": "path-long-extended-native" },
+        { "id": "reparse-any-tag" }
+      ]
+    },
+    {
+      "id": "terminal",
+      "vectors": [
+        ["read-bound-file", "refused", "pre-effect", "none"],
+        ["read-bound-file", "unknown", "pre-effect", "none"],
+        ["read-bound-file", "refused", "read-observation", "none"],
+        ["read-bound-file", "unknown", "read-observation", "none"],
+        ["create-new-durable-file", "refused", "pre-effect", "none"],
+        ["create-new-durable-file", "unknown", "pre-effect", "none"],
+        ["create-new-durable-file", "refused", "create-collision", "not-created"],
+        ["create-new-durable-file", "unknown", "post-create", "possibly-created"]
+      ],
+      "hostileDescriptors": [
+        { "id": "terminal-wrong-consumer" },
+        { "id": "terminal-wrong-outcome" },
+        { "id": "terminal-cross-operation" },
+        { "id": "terminal-extra-property" },
+        { "id": "terminal-missing-property" },
+        { "id": "pre-observation-correlation-forbidden" }
+      ]
+    },
+    {
+      "id": "framing",
+      "vectors": [
+        {
+          "argv": ["observe-v1"],
+          "stdin": "R-then-EOF-only",
+          "stdoutSuccess": "O-0x0A-A-then-EOF",
+          "stdoutTerminal": "T-then-EOF",
+          "recognizedExitCode": 0,
+          "reservedUnableToEmitExitCode": 64
+        }
+      ],
+      "hostileDescriptors": [
+        { "id": "success-missing-lf" },
+        { "id": "success-extra-lf" },
+        { "id": "success-trailing-lf" },
+        { "id": "success-truncated-observation" },
+        { "id": "success-truncated-ack" },
+        { "id": "terminal-trailing-lf" },
+        { "id": "stdout-oversized" },
+        { "id": "stderr-nonzero-marker" },
+        { "id": "exit-unknown" }
+      ]
+    },
+    {
+      "id": "read-bound-file",
+      "vectors": [
+        {
+          "rootFinalPath": "\\\\?\\C:\\fixtures\\rm0032",
+          "identity": {
+            "volumeSerialNumber": "0123456789abcdef",
+            "fileId": "00112233445566778899aabbccddeeff",
+            "size": "13",
+            "lastWriteTime": "0",
+            "fileAttributes": "00000080",
+            "finalPath": "\\\\?\\C:\\fixtures\\rm0032\\bound.txt"
+          },
+          "contentBase64": "dHJhY2VyLWJ1bGxldA==",
+          "contentSha256": "5bda75cbbe279e397253d94c5e25d69b01c84d5d75b05098b537e5747f6d8dc8",
+          "readChunkBytes": 65536
+        }
+      ],
+      "hostileDescriptors": [
+        { "id": "read-cross-path" },
+        { "id": "read-directory-type" },
+        { "id": "read-final-path-case-drift" },
+        { "id": "read-volume-drift" },
+        { "id": "read-file-id-drift" },
+        { "id": "read-mtime-drift" },
+        { "id": "read-size-drift" },
+        { "id": "read-attributes-drift" },
+        { "id": "read-zero-progress" },
+        { "id": "read-race-after-identity" }
+      ]
+    },
+    {
+      "id": "create-new-durable-file",
+      "vectors": [
+        {
+          "name": "nonempty-known",
+          "contentBase64": "dHJhY2VyLWJ1bGxldA==",
+          "contentSha256": "5bda75cbbe279e397253d94c5e25d69b01c84d5d75b05098b537e5747f6d8dc8",
+          "writeRequestedBytes": 13,
+          "writeReturnedBytes": 13
+        },
+        {
+          "name": "zero-valid-handle",
+          "contentBase64": "",
+          "writeCallCount": 1,
+          "writeRequestedBytes": 0,
+          "terminal": ["create-new-durable-file", "unknown", "post-create", "possibly-created"],
+          "laterAction": "owned-handle-resource-release"
+        },
+        {
+          "name": "zero-ambiguity-no-handle",
+          "contentBase64": "",
+          "writeCallCount": 0,
+          "terminal": ["create-new-durable-file", "unknown", "post-create", "possibly-created"],
+          "laterAction": "owned-root-and-existing-ancestor-handle-resource-release-only"
+        },
+        {
+          "name": "collision",
+          "terminal": ["create-new-durable-file", "refused", "create-collision", "not-created"]
+        }
+      ],
+      "hostileDescriptors": [
+        { "id": "create-last-error-ambiguous" },
+        { "id": "create-collision-with-write" },
+        { "id": "create-zero-valid-handle-extra-action" },
+        { "id": "create-zero-ambiguous-write" },
+        { "id": "create-write-false" },
+        { "id": "create-write-short" },
+        { "id": "create-flush-failure" },
+        { "id": "create-rewind-failure" },
+        { "id": "create-close-failure" },
+        { "id": "create-reopen-failure" },
+        { "id": "create-reopen-identity-drift" },
+        { "id": "create-hash-mismatch" },
+        { "id": "create-directory-type" },
+        { "id": "create-zero-deadline-write-order" },
+        { "id": "create-ordered-trace" }
+      ]
+    },
+    {
+      "id": "deadline-resource",
+      "vectors": [
+        {
+          "operationStartMonotonicMs": 1000,
+          "aggregateStartMonotonicMs": 0,
+          "operationDeadlineMonotonicMs": 11000,
+          "aggregateDeadlineMonotonicMs": 15000,
+          "earliestDeadlineMonotonicMs": 11000,
+          "terminationRequestMax": 1,
+          "drainGraceMs": 5000,
+          "ownedHandleKinds": ["root", "existing-ancestor", "read-target", "created-original", "reopened-target"]
+        },
+        {
+          "operationStartMonotonicMs": 14000,
+          "aggregateStartMonotonicMs": 0,
+          "operationDeadlineMonotonicMs": 24000,
+          "aggregateDeadlineMonotonicMs": 15000,
+          "earliestDeadlineMonotonicMs": 15000
+        }
+      ],
+      "hostileDescriptors": [
+        { "id": "deadline-operation-expired" },
+        { "id": "deadline-aggregate-precedence" },
+        { "id": "deadline-overflow" },
+        { "id": "deadline-create-open-classification-dominance" },
+        { "id": "deadline-late-read-refusal-dominance" },
+        { "id": "deadline-post-frame-known-dominance" },
+        { "id": "deadline-aggregate-start-before-request" },
+        { "id": "deadline-post-parse-known-dominance" },
+        { "id": "deadline-clock-fault" },
+        { "id": "deadline-timeout-one-latch" },
+        { "id": "ancestor-stable-identity-revalidation" },
+        { "id": "native-trace-last-error-adjacency" },
+        { "id": "termination-request-repeat" },
+        { "id": "handle-double-close" },
+        { "id": "handle-unknown-kind" }
+      ]
+    },
+    {
+      "id": "adapter",
+      "vectors": [
+        {
+          "acceptedBinding": {
+            "observerAbsolutePath": "C:\\ProgramData\\DecadansNeurobro\\Phase3\\bin\\rm0032-phase3-native-observer-v1.exe",
+            "observerSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "evidenceRootAbsolutePath": "C:\\ProgramData\\DecadansNeurobro\\Phase3\\evidence\\native-observer-v1"
+          },
+          "evidenceRootPolicy": "exact-accepted-binding-only",
+          "invocationAttemptCount": 1,
+          "stoppedCallInvocationAttemptCount": 0,
+          "transportProductionImplementationPresent": false,
+          "retryAuthorized": false,
+          "cleanupAuthorized": false,
+          "fallbackAuthorized": false
+        }
+      ],
+      "hostileDescriptors": [
+        { "id": "request-wrong-consumer" },
+        { "id": "observation-wrong-consumer" },
+        { "id": "ack-wrong-consumer" },
+        { "id": "observation-missing-property" },
+        { "id": "observation-extra-property" },
+        { "id": "ack-missing-property" },
+        { "id": "ack-extra-property" },
+        { "id": "output-schema-drift" },
+        { "id": "output-version-drift" },
+        { "id": "cross-operation-request" },
+        { "id": "cross-operation-observation" },
+        { "id": "cross-operation-ack" },
+        { "id": "marker-evidence-collision" },
+        { "id": "evidence-truncated" },
+        { "id": "evidence-corrupt" },
+        { "id": "ack-corrupt" },
+        { "id": "ack-hash-mismatch" },
+        { "id": "late-known" },
+        { "id": "concurrent-invocation" },
+        { "id": "stopped-call" },
+        { "id": "evidence-root-mismatch" },
+        { "id": "create-output-symmetry" },
+        { "id": "create-terminal-matrix" },
+        { "id": "method-payload-fresh-observer-zero-transport" },
+        { "id": "request-pre-cap-allocation" },
+        { "id": "base64-cap-boundary" },
+        { "id": "create-request-symmetry" },
+        { "id": "bounded-request-correlation" }
+      ]
+    }
+  ]
+}

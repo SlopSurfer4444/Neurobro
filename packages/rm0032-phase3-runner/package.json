@@ -1,0 +1,15 @@
+{
+  "name": "@decadans/rm0032-phase3-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "check": "node --experimental-strip-types --check src/contract.ts && node --experimental-strip-types --check src/typescript-baseline.ts && node --experimental-strip-types --check src/rust-sidecar-adapter.ts && node --experimental-strip-types --check test/contract.test.ts && node --experimental-strip-types --check test/faults.test.ts && node --experimental-strip-types --check bench/process-boundary-benchmark.ts",
+    "typecheck": "node ../telegram-gateway/node_modules/typescript/bin/tsc -p tsconfig.json",
+    "test": "npm run check --silent && node --experimental-strip-types --test --test-concurrency=1 test/contract.test.ts test/faults.test.ts",
+    "bench": "npm run check --silent && node --experimental-strip-types bench/process-boundary-benchmark.ts"
+  }
+}
