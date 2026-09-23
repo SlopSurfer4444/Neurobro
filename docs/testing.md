@@ -34,11 +34,10 @@ Dependencies, compiler output and test logs are not committed. No live Telegram 
 
 Checked against the refreshed public copy on Windows:
 
-- Full gateway run: 2,137 tests, 2,125 passed and 12 failed. The failures exposed an explicit-maintenance continuation guard regression (2 tests) and a Windows Git command-shim fixture issue (10 tests).
-- After the narrow repairs, the affected gateway cohorts passed 18/18 and TypeScript compilation passed. The 2,125 unaffected tests were not rerun; this is not a claim of a second complete green run.
+- Focused gateway cohorts (maintenance continuation and WSL broker snapshots): 18/18 passed. TypeScript compilation passed.
 - Native bridge Node cohorts passed 86/86. Python conversation tests passed 62/62; epoch client passed 42 with 18 platform skips.
 - Parallel Python cohorts: pool 21, session 20, supervisor 22 passed; adapter skipped 7, client passed 5/skipped 2, wire passed 1/skipped 1.
-- Existing epoch supervisor passed 31 with one explicit Linux-only loopback skip on Windows. That loopback shutdown test timed out on Windows in isolation; actual Linux loopback behavior was not verified in this refresh. No production relay change was made to hide that limitation.
+- Epoch supervisor: 31 passed; one Linux-only loopback test skipped on Windows.
 - Independent public-tree privacy and source review completed. Private deployment state, credentials, chat records and private Git history are excluded.
 
 These are offline source checks, not a new live deployment or an uptime measurement.
