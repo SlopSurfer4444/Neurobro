@@ -1,3 +1,4 @@
+import { STANDING_INCOMING_TEXT_BYTES } from "./standing-context.js";
 import { createHash } from "node:crypto";
 import { types } from "node:util";
 import type { PilotBinding, PilotPrimary } from "./pilot-telegram-adapter.js";
@@ -6,6 +7,7 @@ import type { StandingHistoryTaskDiscovery } from "./standing-history-task-disco
 import type { StandingHistoryTaskManager, StandingHistoryManagedTaskStatus } from "./standing-history-task-manager.js";
 import { snapshotStandingHistoryTaskIntent, type StandingHistoryTaskIntent } from "./standing-history-task-store.js";
 import type { StandingSharedTask, StandingSharedContextCoverage } from "./standing-shared-context.js";
+import { projectStandingHistoryTaskProgress, type StandingHistoryTaskProgressEvent } from "./standing-history-task-progress.js";
 
 /** Opaque, single-use host continuation. Its actual discovery cursor never
  * enters a model packet and cannot be transplanted to another actor or reader. */
@@ -98,12 +100,14 @@ function mapped(intent: StandingHistoryTaskIntent, raw: unknown, owner: Pick<Own
   const sourceRef = ref("stask", ["standing-task-context-source-v1", owner.scopeRef, intent.taskId]);
   const base = { kind: "task-state" as const, sourceRef, versionRef: ref("sver", ["standing-task-context-version-v1", sourceRef, intent, status ?? "unavailable"]),
     observedAt: asOf, taskRef: intent.taskId,
-    description: { objective: intent.objective, fromDate: intent.fromDate, toDate: intent.toDate, timezone: intent.timezone } };
+    description: { objective: intent.objective, fromDate: intent.fromDate, toDate: intent.toDate, timezone: intent.timezone,
+      ...(intent.source ? { source: "community" as const } : {}) } };
   const unknown: StandingSharedTask = { ...base, control: "unavailable", read: "unavailable", analysis: "unavailable",
     outputPrepared: "unavailable", nodeCommitted: "unavailable", modelOutcome: "unavailable", delivery: "unavailable", disposition: "unavailable" };
   if (!status) return unknown;
   if (status.taskRef !== intent.taskId) return fail();
-  const s = record(status, ["taskRef", "control", "read", "analysis"], ["attempts", "delivery", "disposition"]);
+  const s = record(status, ["taskRef", "control", "read", "analysis"], ["attempts", "delivery", "disposition", "source"]);
+  if ((s.source === "community") !== !!intent.source || Object.hasOwn(s, "source") && s.source !== "community") return fail();
   const c = record(s.control, ["storage", "state", "revision", "headHash"]);
   member(c.storage, ["ready", "tail-refused"]); const control = member(c.state, ["queued", "cancelled"]);
   if (c.revision !== (control === "cancelled" ? 1 : 0) || typeof c.headHash !== "string" || !/^[0-9a-f]{64}$/u.test(c.headHash)) return fail();
@@ -129,9 +133,11 @@ function mapped(intent: StandingHistoryTaskIntent, raw: unknown, owner: Pick<Own
   }
   const delivery = status.delivery === undefined ? "not-inspected" : member(status.delivery.state, ["verified", "unknown", "failed-terminal", "partial", "not-attempted", "unavailable"]);
   const disposition = status.disposition?.storage === "ready"
-    ? member(status.disposition.reason, ["coverage", "stale", "consumed-without-prepared", "source-page-quota", "overflow"])
+    ? member(status.disposition.reason, ["coverage", "stale", "consumed-without-prepared", "source-page-quota", "report-required", "overflow"])
     : status.disposition?.storage === "absent" ? "none" : "unavailable";
-  return { ...base, control, read, analysis, outputPrepared, nodeCommitted, modelOutcome, delivery, disposition };
+  return { ...base, control, read, analysis, outputPrepared, nodeCommitted, modelOutcome, delivery, disposition,
+    savedProgress: { committedPages: status.read.storage === "ready" ? status.read.readProgress.committedPages : null,
+      analysisNodes: status.analysis.storage === "ready" ? status.analysis.analysisNodes : null, observedAt: asOf, freshness: "stale" } };
 }
 
 /** One discovery page and at most four serial status reads. The caller owns
@@ -145,7 +151,7 @@ export async function readStandingHistoryTaskContext(input: StandingHistoryTaskC
   const b = record(v.binding, ["accountId", "peerId"]), p = record(v.primary, ["chatId", "ownerId", "messageId", "text"]);
   if (typeof b.accountId !== "string" || !/^[1-9]\d{0,19}$/u.test(b.accountId) || typeof b.peerId !== "string" || !/^-[1-9]\d{0,19}$/u.test(b.peerId) ||
       p.chatId !== b.peerId || typeof p.ownerId !== "string" || !/^[1-9]\d{0,19}$/u.test(p.ownerId) || !Number.isInteger(p.messageId) || Number(p.messageId) < 1 || Number(p.messageId) > 2147483647 ||
-      typeof p.text !== "string" || !p.text.length || p.text.includes("\0") || Buffer.byteLength(p.text) > 4096 || Buffer.from(p.text).toString() !== p.text ||
+      typeof p.text !== "string" || !p.text.length || p.text.includes("\0") || Buffer.byteLength(p.text) > STANDING_INCOMING_TEXT_BYTES || Buffer.from(p.text).toString() !== p.text ||
       typeof v.scopeRef !== "string" || !/^[a-z][a-z0-9-]{0,31}_[0-9a-f]{32,64}$/u.test(v.scopeRef) || types.isProxy(v.signal) || !(v.signal instanceof AbortSignal)) return fail();
   const asOf = positive(v.asOf), owner: Owner = { binding: freeze({ accountId: b.accountId, peerId: b.peerId }),
     primary: freeze({ chatId: p.chatId as string, ownerId: p.ownerId, messageId: Number(p.messageId), text: p.text }),
@@ -231,13 +237,30 @@ export function createStandingHistoryTaskContextProjection(input: StandingHistor
   const live = () => { if (signal.aborted || !references.matches(binding.peerId, binding.accountId)) return fail(); };
   live();
   return Object.freeze({
-    capture(value: Readonly<{ intent: StandingHistoryTaskIntent; status: StandingHistoryManagedTaskStatus; observedAt: number }>): StandingHistoryTaskContextObservation {
-      live(); const c = record(value, ["intent", "status", "observedAt"]), intent = snapshotStandingHistoryTaskIntent(c.intent), observedAt = positive(c.observedAt);
+    capture(value: Readonly<{ intent: StandingHistoryTaskIntent; status: StandingHistoryManagedTaskStatus; observedAt: number;
+      previous?: StandingHistoryTaskContextObservation }>): StandingHistoryTaskContextObservation {
+      live(); const c = record(value, ["intent", "status", "observedAt"], ["previous"]), intent = snapshotStandingHistoryTaskIntent(c.intent), observedAt = positive(c.observedAt);
       if (c.status === undefined || intent.accountId !== binding.accountId || intent.chatId !== binding.peerId || references.speaker(intent.requesterId) === "neurobro") return fail();
-      const task = freeze(mapped(intent, c.status, { scopeRef }, observedAt));
+      let task = mapped(intent, c.status, { scopeRef }, observedAt);
+      if (Object.hasOwn(c, "previous")) {
+        const prior = c.previous as StandingHistoryTaskContextObservation, previous = saved.get(prior);
+        if (!previous || prior.taskRef !== intent.taskId || prior.requesterId !== intent.requesterId || prior.observedAt > observedAt || (previous.task.progress?.observedAt ?? 0) > observedAt ||
+            prior.intentRef !== ref("tintent", ["standing-task-context-intent-v1", scopeRef, intent])) return fail();
+        if (previous.task.progress) task = { ...task, progress: previous.task.progress,
+          versionRef: ref("sver", ["standing-task-context-progress-v1", task.versionRef, previous.task.progress]) };
+      }
+      task = freeze(task);
       const observation = Object.freeze({ taskRef: task.taskRef, requesterId: intent.requesterId, observedAt,
         intentRef: ref("tintent", ["standing-task-context-intent-v1", scopeRef, intent]) });
       saved.set(observation, { task, invalidated: false }); return observation;
+    },
+    progress(observation: StandingHistoryTaskContextObservation, event: StandingHistoryTaskProgressEvent, observedAt: number): StandingHistoryTaskContextObservation {
+      live(); const previous = saved.get(observation); if (!previous) return fail();
+      const progress = projectStandingHistoryTaskProgress(event, observedAt);
+      if (event.taskRef !== observation.taskRef || progress.observedAt < observation.observedAt || progress.observedAt < (previous.task.progress?.observedAt ?? 0)) return fail();
+      const task = freeze({ ...previous.task, progress,
+        versionRef: ref("sver", ["standing-task-context-progress-v1", previous.task.versionRef, progress]) });
+      const result = Object.freeze({ ...observation }); saved.set(result, { task, invalidated: previous.invalidated }); return result;
     },
     /** Authenticated bounded discovery proves the immutable request's purpose,
      * not control, progress, model outcome or delivery. No status read occurs. */
@@ -262,15 +285,16 @@ export function createStandingHistoryTaskContextProjection(input: StandingHistor
     issue(value: Readonly<{ primary: PilotPrimary; asOf: number; observations: readonly StandingHistoryTaskContextObservation[] }>): StandingHistoryTaskContextPage {
       live(); const request = record(value, ["primary", "asOf", "observations"]), p = record(request.primary, ["chatId", "ownerId", "messageId", "text"]), asOf = positive(request.asOf);
       if (p.chatId !== binding.peerId || typeof p.ownerId !== "string" || !/^[1-9]\d{0,19}$/u.test(p.ownerId) || references.speaker(p.ownerId) === "neurobro" ||
-          !Number.isInteger(p.messageId) || Number(p.messageId) < 1 || Number(p.messageId) > 2147483647 || typeof p.text !== "string" || !p.text.length || p.text.length > 4096 ||
-          Buffer.byteLength(p.text) > 4096 || p.text.includes("\0") || Buffer.from(p.text).toString() !== p.text) return fail();
+          !Number.isInteger(p.messageId) || Number(p.messageId) < 1 || Number(p.messageId) > 2147483647 || typeof p.text !== "string" || !p.text.length ||
+          Buffer.byteLength(p.text) > STANDING_INCOMING_TEXT_BYTES || p.text.includes("\0") || Buffer.from(p.text).toString() !== p.text) return fail();
       const primary = freeze({ chatId: p.chatId, ownerId: p.ownerId, messageId: Number(p.messageId), text: p.text });
       const observations = array(request.observations, 4), items: StandingSharedTask[] = [], seen = new Set<string>();
       let invalidated = false;
       for (const observation of observations) {
         if (!observation || typeof observation !== "object" || types.isProxy(observation)) return fail();
         const entry = saved.get(observation as StandingHistoryTaskContextObservation), task = entry?.task;
-        if (!task || (observation as StandingHistoryTaskContextObservation).requesterId !== primary.ownerId || task.observedAt === null || task.observedAt > asOf || seen.has(task.taskRef)) return fail();
+        if (!task || (observation as StandingHistoryTaskContextObservation).requesterId !== primary.ownerId || task.observedAt === null || task.observedAt > asOf ||
+            (task.progress?.observedAt ?? 0) > asOf || (task.savedProgress?.observedAt ?? 0) > asOf || seen.has(task.taskRef)) return fail();
         invalidated ||= entry!.invalidated;
         seen.add(task.taskRef); items.push(task);
       }

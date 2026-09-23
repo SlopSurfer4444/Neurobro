@@ -80,7 +80,7 @@ async function rejectsCode(promise: Promise<unknown>, code: string): Promise<voi
 
 before(async () => {
   const located = process.platform === "win32"
-    ? execFileSync("where.exe", ["git"], { encoding: "utf8", windowsHide: true }).split(/\r?\n/u).find(Boolean)
+    ? execFileSync("where.exe", ["git"], { encoding: "utf8", windowsHide: true }).split(/\r?\n/u).find(path => /\.exe$/iu.test(path))
     : execFileSync("/usr/bin/which", ["git"], { encoding: "utf8" }).trim();
   assert.ok(located);
   gitExecutable = await realpath(located);

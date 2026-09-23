@@ -56,6 +56,13 @@ test('generic document, persisted randomId, bounded upload, exact document readb
   assert.ok(h.calls[2] instanceof Api.channels.GetMessages);assert.deepEqual(h.calls[2].id.map(i=>{assert.ok(i instanceof Api.InputMessageID);return i.id;}),[11]);
   await assert.rejects(h.transport.sendOnce(value,h.stop.signal));await assert.rejects(h.transport.readExact(binding.peerId,11,h.stop.signal));assert.equal(h.calls.length,3);
 });
+test('long Russian selected request remains file-toolable through exact revalidation', async () => {
+  const selected = { ...primary, text: 'ПРОМПТ ' + 'я'.repeat(4000) + ' конец' };
+  const h = harness({ args: { selected }, revalidate: async () => ({ ...selected }) });
+  assert.deepEqual(await h.transport.sendOnce(input(), h.stop.signal), { messageId: 11, documentId: '777' });
+  assert.equal((await h.transport.readExact(binding.peerId, 11, h.stop.signal))?.caption, 'caption');
+  assert.equal(h.revalidations.length, 2);
+});
 test('upload chunks are strictly sequential, copy owned and intact until in-flight part settles',async()=>{
   const pending=deferred();const admitted=deferred(),parts: Buffer[]=[];
   const bytes=Buffer.alloc(524288+100,42);PNG.copy(bytes,0);const original=Buffer.from(bytes);

@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import {readFileSync,mkdtempSync,readdirSync,lstatSync,unlinkSync,rmdirSync,renameSync,mkdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
-import {SOURCE_NAMES,SOURCE_PINS} from './rm-0032-standing-epoch-host.mjs';
+import {SOURCE_NAMES,SOURCE_PINS,preparePacket,frameSource} from './rm-0032-standing-epoch-host.mjs';
 import {prepareStandingEpochRuntime} from './rm-0032-standing-epoch-runtime.mjs';
+import {scopedRuntimeFixture} from './rm-0032-standing-scoped-runtime-fixture.mjs';
 const root=resolve(process.env.NEUROBRO_PUBLIC_SOURCE_ROOT??'project/verification');
 const sources=Object.fromEntries(Object.entries(SOURCE_NAMES).map(([key,name])=>[key,readFileSync(resolve(root,name),'utf8')]));
 const pins={...SOURCE_PINS};
@@ -44,16 +45,84 @@ function setup(options={}){
         })();return closePromise;
       },
     };
+    actor.turnAnalysis=(...args)=>actor.turn(...args);
     actors.push(actor);await tick();return actor;
   };
   const input={sources:{...sources},pins:{...pins},attemptParent:options.parent??resolve('synthetic-attempt-parent'),workerToken:'a'.repeat(32),createWire:()=>{},openSession:()=>{},
+    ...(Object.hasOwn(options,'workProfile')?{workProfile:options.workProfile}:{}),
+    ...(Object.hasOwn(options,'sessionMode')?{sessionMode:options.sessionMode}:{}),
     ...(options.isTurnNotAdmitted?{isTurnNotAdmitted:options.isTurnNotAdmitted}:{})};
   const ports={spawn,openOwner,...(options.realStore?{}:{store})};
   const runtime=prepareStandingEpochRuntime(input,ports);
   const history={call:async()=>{calls++;return{};}};
   return {runtime,input,ports,store,events,actors,records,spawns,control,history,historyCalls:()=>calls,
-    connect:extraTools=>runtime.openConnection({history,signal:control.signal,...(extraTools===undefined?{}:{extraTools})})};
+    connect:extraTools=>runtime.openConnection({history,signal:control.signal,...(extraTools===undefined?{}:{extraTools}),...(Object.hasOwn(options,'workProfile')?{workProfile:options.workProfile}:{})})};
 }
+
+test('work profile is captured for every prepared capsule and rotation while legacy stays omitted',async()=>{
+  for(const selected of [{},{workProfile:'team-assistant'},{workProfile:'community-team'}]){
+    const f=setup(selected),connectionInput={history:f.history,signal:f.control.signal,...selected},c=f.runtime.openConnection(connectionInput);
+    f.input.workProfile='changed';connectionInput.workProfile='changed';
+    await c.prepare();f.actors[0].rotate();await c.prepare();await c.close();
+    assert.equal(f.records.length,2);
+    for(const [index,record] of f.records.entries()){
+      const expected=preparePacket({sources,pins,token:record.intent.token,...selected});
+      assert.equal(record.intent.sourceSha256,expected.sourceSha256);
+      assert.deepEqual(f.actors[index].input.bootstrap,frameSource(expected.source));
+      assert.equal(record.intent.workProfile,selected.workProfile);
+      assert.equal(Object.hasOwn(record.intent,'workProfile'),Object.hasOwn(selected,'workProfile'));
+    }
+  }
+});
+
+test('mismatched or malformed connection profile refuses before lease, reserve or spawn',async()=>{
+  for(const configured of [{},{workProfile:'team-assistant'},{workProfile:'community-team'}]){
+    const f=setup(configured),base={history:f.history,signal:f.control.signal};
+    const mismatches=Object.hasOwn(configured,'workProfile')?[base]:[{...base,workProfile:'community-team'}];
+    for(const workProfile of ['team-assistant','community-team'])if(workProfile!==configured.workProfile)mismatches.push({...base,workProfile});
+    for(const value of [undefined,null,false,'legacy',{},'arbitrary instructions'])mismatches.push({...base,workProfile:value});
+    let reads=0,traps=0;
+    const getter={...base};Object.defineProperty(getter,'workProfile',{get(){reads++;return 'community-team';}});mismatches.push(getter);
+    mismatches.push(new Proxy({...base},{getOwnPropertyDescriptor(){traps++;throw Error('unexpected proxy trap');}}));
+    for(const bad of mismatches){
+      assert.throws(()=>f.runtime.openConnection(bad),error=>error.code==='CONFIG');
+      assert.equal(f.runtime.state().connectionOpen,false);assert.deepEqual(f.events,[]);
+    }
+    assert.equal(reads,0);assert.equal(traps,0);
+    const c=f.connect();await c.close();
+  }
+  const f=setup();let reads=0;
+  for(const value of [undefined,null,false,'legacy',{},'arbitrary instructions'])assert.throws(()=>prepareStandingEpochRuntime({...f.input,workProfile:value},f.ports),error=>error.code==='CONFIG');
+  const getter={...f.input};Object.defineProperty(getter,'workProfile',{get(){reads++;return 'community-team';}});
+  assert.throws(()=>prepareStandingEpochRuntime(getter,f.ports),error=>error.code==='CONFIG');assert.equal(reads,0);assert.deepEqual(f.events,[]);
+});
+
+test('scoped cold settlement refuses records belonging to a different work profile',async()=>{
+  const saved=await scopedRuntimeFixture();
+  try{
+  await saved.connection.prepare();await saved.connection.close();
+  const token=saved.ownerInputs[0].epochId;
+  const actual=JSON.parse(readFileSync(resolve(saved.parent,token,'actual.json'),'utf8'));
+  for(const selected of [{},{workProfile:'team-assistant'},{workProfile:'community-team'}]){
+    const f=setup({...selected,sessionMode:'standing-scoped-epoch-v1'});
+    const packet=preparePacket({sources,pins,token,...selected,sessionMode:'standing-scoped-epoch-v1'});
+    const intent={operation:'standing-native-epoch-v1',workerToken:'a'.repeat(32),token,sourceSha256:packet.sourceSha256,sources:packet.pins,model:'gpt-6-astra',effort:'medium',threadLimit:2,turnLimit:16,sessionMode:'standing-scoped-epoch-v1',...selected};
+    const binding={epochId:token,requestRef:'old-analysis',purpose:'history-analysis'};
+    f.store.verify=async()=>({intent,actual});
+    assert.deepEqual((await f.runtime.verifyAnalysisSettlement(binding)).nativeBinding,binding);
+    const original={...intent};
+    if(Object.hasOwn(selected,'workProfile'))delete intent.workProfile;else intent.workProfile='community-team';
+    await assert.rejects(f.runtime.verifyAnalysisSettlement(binding),error=>error.code==='CONFIG'||error.code==='RECORD');
+    if(Object.hasOwn(selected,'workProfile')){
+      intent.workProfile=selected.workProfile==='team-assistant'?'community-team':'team-assistant';
+      await assert.rejects(f.runtime.verifyAnalysisSettlement(binding),error=>error.code==='RECORD');
+    }
+    Object.assign(intent,original);intent.workProfile='foreign';
+    await assert.rejects(f.runtime.verifyAnalysisSettlement(binding),error=>error.code==='CONFIG'||error.code==='RECORD');
+    assert.deepEqual(f.events,[]);
+  }
+  }finally{await saved.connection.close();saved.cleanup();}
+});
 test('lazy start, same owner across released turns, fixed spawn and no private persistence',async()=>{
   const f=setup(),c=f.connect();assert.equal(f.spawns.length,0);assert.throws(()=>f.connect());
   assert.deepEqual(await c.prepare(),{restoration:true});assert.deepEqual(f.events.slice(0,4),['reserve','open','spawn','controller']);
@@ -228,6 +297,114 @@ test('only branded pre-admission proof permits settled successor; failed persist
     await c.close();
   }
 });
+
+const analysisBody=JSON.stringify({schema:'neurobro-history-analysis-input-v1',kind:'leaf',objective:'Summarize the shown material',materialAvailable:true});
+const analysisCallbacks=()=>({analysisTools:['neurobro_analysis_material','neurobro_analysis_notes','neurobro_analysis_commit'].map(name=>({name,call:async()=>({success:true,contentItems:[{type:'inputText',text:'{}'}]})})),onToolResultSent:()=>{}});
+for(const refusal of ['local-clock','guest-limit'])test('analysis '+refusal+' after lease acquisition preserves branded refusal until exact old owner settlement',async()=>{
+  let now=0,finish;const holdFinal=new Promise(done=>{finish=done;});
+  const options={clock:()=>now,holdFinal,analysisCall:()=>null};
+  const f=await scopedRuntimeFixture(options);let lease;
+  try{
+    await f.connection.prepare();lease=await f.connection.acquireAnalysisAdmission('analysis-refused');
+    const binding=lease.nativeBinding,child=f.children[0];
+    // Both cross advisory readiness after acquisition; the guest case retains
+    // enough host time and exercises an exact wire refusal before native dispatch.
+    now=refusal==='local-clock'?600001:596000;child.refuseAnalysis=refusal==='guest-limit';
+    await assert.rejects(lease.turnAnalysis(binding.requestRef,analysisBody,analysisCallbacks()),error=>f.isTurnNotAdmitted(error)&&error.reason==='time');
+    assert.equal(f.connection.state().failedAnalysisTurn,false);assert.equal(f.connection.state().pendingRelease,true);
+    assert.equal(f.children.length,1);assert.equal(child.turns,0);assert.equal(child.calls['history-analysis'],0);
+    assert.equal(child.sent.filter(frame=>frame.kind==='turn').length,refusal==='guest-limit'?1:0);
+    await assert.rejects(lease.turnAnalysis(binding.requestRef,analysisBody,analysisCallbacks()));
+    await assert.rejects(lease.releaseAnalysis(binding.requestRef));
+    await assert.rejects(f.connection.prepare());await assert.rejects(f.connection.acquireAnalysisAdmission('premature',binding));
+    let joined=false;const stopping=lease.abortAndJoin().then(proof=>{joined=true;return proof;});
+    await tick();assert.equal(joined,false);assert.equal(f.children.length,1);
+    finish();const proof=await stopping;
+    assert.deepEqual(proof.nativeBinding,binding);assert.equal(proof.replacementReady,true);assert.equal(child.exited,true);
+    const record=JSON.parse(readFileSync(resolve(f.parent,binding.epochId,'actual.json'),'utf8'));
+    assert.equal(record.resourcesSettled,true);assert.equal(record.replacementReady,true);
+    assert.equal(record.diagnostics.epoch.session.code,refusal==='guest-limit'?'EPOCH_LIMIT':'CLOSED');
+    assert.equal(record.diagnostics.epoch.native.turnStartDispatches,0);assert.equal(record.diagnostics.epoch.native.threadStartDispatches,0);
+    // The held lease still excludes replacement even after its exact settlement.
+    await assert.rejects(f.connection.prepare());await lease.close();
+    await f.connection.prepare();assert.equal(f.children.length,2);
+    const next=await f.connection.acquireAnalysisAdmission('analysis-successor',binding,{requireNewEpoch:true});
+    assert.notEqual(next.nativeBinding.epochId,binding.epochId);assert.notEqual(next.nativeBinding.requestRef,binding.requestRef);
+    await next.turnAnalysis(next.nativeBinding.requestRef,analysisBody,analysisCallbacks());await next.releaseAnalysis(next.nativeBinding.requestRef);await next.close();
+    assert.equal(child.turns,0);assert.equal(f.children[1].turns,1);assert.equal(f.connection.state().failedAnalysisTurn,false);
+  }finally{finish();if(lease)await lease.close().catch(()=>{});await f.connection.close();f.cleanup();}
+});
+
+test('scoped known-empty retry forces persisted old-owner rotation before new admission',async()=>{
+  let finish;const holdFinal=new Promise(done=>{finish=done;}),f=await scopedRuntimeFixture({holdFinal,analysisCall:()=>null});
+  try{
+    await f.connection.prepare();const prior=await f.connection.acquireAnalysisAdmission('prior-empty');
+    await prior.turnAnalysis('prior-empty',analysisBody,analysisCallbacks());await prior.releaseAnalysis('prior-empty');await prior.close();
+    const retry=f.connection.acquireAnalysisAdmission('retry',prior.nativeBinding,{requireNewEpoch:true});
+    await tick();assert.equal(f.children.length,1);finish();const next=await retry;
+    assert.notEqual(next.nativeBinding.epochId,prior.nativeBinding.epochId);assert.equal(f.children[0].exited,true);
+    assert.equal((await f.runtime.verifyAnalysisSettlement(prior.nativeBinding)).persisted,true);assert.equal(f.children[1].turns,0);await next.close();
+  }finally{finish();await f.connection.close();f.cleanup();}
+});
+
+test('scoped forced retry refuses an unclosed lease or pending foreground without interrupting the owner',async()=>{
+  const f=await scopedRuntimeFixture({analysisCall:()=>null});try{
+    await f.connection.prepare();const prior=await f.connection.acquireAnalysisAdmission('prior-empty');
+    await prior.turnAnalysis('prior-empty',analysisBody,analysisCallbacks());await prior.releaseAnalysis('prior-empty');
+    await assert.rejects(f.connection.acquireAnalysisAdmission('retry-held',prior.nativeBinding,{requireNewEpoch:true}));
+    assert.equal(f.children[0].exited,false);await prior.close();
+    await f.connection.turn('foreground','question');
+    await assert.rejects(f.connection.acquireAnalysisAdmission('retry-pending',prior.nativeBinding,{requireNewEpoch:true}));
+    assert.equal(f.children[0].exited,false);await f.connection.release('foreground','verified');
+    const next=await f.connection.acquireAnalysisAdmission('retry',prior.nativeBinding,{requireNewEpoch:true});await next.close();
+  }finally{await f.connection.close();f.cleanup();}
+});
+
+test('scoped retry options are strict data-only records and require a previous binding',async()=>{
+  const f=await scopedRuntimeFixture();let reads=0;try{
+    await f.connection.prepare();const previous={epochId:f.ownerInputs[0].epochId,requestRef:'prior',purpose:'history-analysis'};
+    const getter={};Object.defineProperty(getter,'requireNewEpoch',{get(){reads++;return true;}});
+    const proxy=new Proxy({requireNewEpoch:true},{getOwnPropertyDescriptor(){reads++;throw Error('trap');},getPrototypeOf(){reads++;throw Error('trap');}});
+    for(const options of [null,{},false,{requireNewEpoch:false},{requireNewEpoch:true,extra:true},getter,proxy])await assert.rejects(f.connection.acquireAnalysisAdmission('retry',previous,options));
+    await assert.rejects(f.connection.acquireAnalysisAdmission('retry',undefined,{requireNewEpoch:true}));
+    assert.equal(reads,0);assert.equal(f.children.length,1);assert.equal(f.children[0].exited,false);
+  }finally{await f.connection.close();f.cleanup();}
+});
+
+test('scoped forced retry retains fatal current-owner persistence failure',async()=>{
+  const f=await scopedRuntimeFixture({failFinal:true,analysisCall:()=>null});try{
+    await f.connection.prepare();const prior=await f.connection.acquireAnalysisAdmission('prior-empty');
+    await prior.turnAnalysis('prior-empty',analysisBody,analysisCallbacks());await prior.releaseAnalysis('prior-empty');await prior.close();
+    await assert.rejects(f.connection.acquireAnalysisAdmission('retry',prior.nativeBinding,{requireNewEpoch:true}),e=>e.code==='SETTLEMENT_UNKNOWN');
+    assert.equal(f.runtime.state().blocked,true);assert.equal(f.children.length,1);
+  }finally{await f.connection.close();f.cleanup();}
+});
+
+test('analysis no-admission proof never overrides failed owner persistence',async()=>{
+  const f=await scopedRuntimeFixture({refuseAnalysis:true,failFinal:true});let lease;
+  try{
+    await f.connection.prepare();lease=await f.connection.acquireAnalysisAdmission('analysis-refused');
+    await assert.rejects(lease.turnAnalysis(lease.nativeBinding.requestRef,analysisBody,analysisCallbacks()),f.isTurnNotAdmitted);
+    assert.equal(f.connection.state().failedAnalysisTurn,false);
+    await assert.rejects(lease.abortAndJoin(),error=>error.code==='SETTLEMENT_UNKNOWN');
+    await assert.rejects(lease.close());assert.equal(f.runtime.state().blocked,true);
+    await assert.rejects(f.connection.prepare());assert.equal(f.children.length,1);assert.equal(f.children[0].turns,0);
+    await assert.rejects(f.runtime.verifyAnalysisSettlement(lease.nativeBinding));
+  }finally{if(lease)await lease.close().catch(()=>{});await f.connection.close();f.cleanup();}
+});
+
+test('analysis string and code lookalikes retain the exact unknown failure and cannot be redispatched',async()=>{
+  for(const error of ['STANDING_EPOCH_TURN_NOT_ADMITTED_TIME',Object.assign(Error('STANDING_EPOCH_TURN_NOT_ADMITTED_TIME'),{name:'EpochTurnNotAdmitted',code:'SESSION_LIMIT',reason:'time'})]){
+    const f=setup({sessionMode:'standing-scoped-epoch-v1',turnFail:error,isTurnNotAdmitted:value=>value instanceof SyntheticNotAdmitted}),c=f.connect();
+    await c.prepare();const lease=await c.acquireAnalysisAdmission('analysis-unknown');
+    await assert.rejects(lease.turnAnalysis(lease.nativeBinding.requestRef,analysisBody,analysisCallbacks()),actual=>actual===error);
+    assert.equal(c.state().failedAnalysisTurn,true);assert.equal(c.state().pendingRelease,true);
+    await assert.rejects(lease.turnAnalysis(lease.nativeBinding.requestRef,analysisBody,analysisCallbacks()));await assert.rejects(c.prepare());
+    assert.equal(f.actors.length,1);assert.equal(f.actors[0].turns.length,1);
+    await lease.abortAndJoin();await lease.close();assert.equal(c.state().failedAnalysisTurn,true);await c.close();
+  }
+});
+
 test('real exclusive files contain metadata, and changed attempt directory identity refuses final write',async()=>{
   for(const tamper of [false,true]){
     const parent=mkdtempSync(resolve(tmpdir(),'neurobro-epoch-store-'));

@@ -18,6 +18,8 @@ export type PilotRecord = Readonly<{
   contentHash: string;
   textBytes: number;
   messageId?: number;
+  /** Present only after a verified task reply was observed without a wire anchor. */
+  wireReplyToMessageId?: null;
 }>;
 /** reserve must exclusively claim one durable attempt. append must sync before resolving.
  * Any existing, partial or unknown attempt must block reserve; no recovery/reset API. */
@@ -27,7 +29,7 @@ export interface PilotStore {
 }
 export type PilotReply = Readonly<{ chatId: string; replyToMessageId: number | null; text: string; entities?: readonly TelegramTextEntity[] }>;
 export type PilotSend = PilotReply & Readonly<{ randomId: string }>;
-export type PilotReadback = PilotReply & Readonly<{ messageId: number; accountId: string }>;
+export type PilotReadback = PilotReply & Readonly<{ messageId: number; accountId: string; taskReplyOriginMessageId?: number }>;
 /** The runner supplies the sole gateway, with transport retries disabled. sendOnce must
  * perform exactly one send invocation; readExact must perform one fresh exact-ID read. */
 export interface PilotTransport {
@@ -41,7 +43,8 @@ export class PilotPreDispatchError extends Error {
   constructor() { super("PILOT_PRE_DISPATCH_REFUSED"); }
 }
 export interface PilotReplyInput {
-  approved: Readonly<{ chatId: string; accountId: string; replyToMessageId: number | null; maximumTextBytes: number }>;
+  approved: Readonly<{ chatId: string; accountId: string; replyToMessageId: number | null; maximumTextBytes: number;
+    taskReplyPolicy?: "standalone-if-exact-missing" }>;
   reply: PilotReply;
   store: PilotStore;
   transport: PilotTransport;
@@ -51,11 +54,21 @@ export interface PilotReplyInput {
 /** Fixed boundary metadata only: no error strings, message content or identities.
  * Only pre-dispatch-refused proves no send invocation; other values locate an
  * observation failure without determining whether a remote send took effect. */
-export type PilotDeliveryDiagnostic = "send" | "send-result" | "readback" | "readback-shape" | "readback-mismatch"
+const taskSendDiagnostics = ["task-preflight", "task-anchor-read", "task-anchor-validation", "task-send-rpc", "task-ack-parse"] as const;
+export type PilotTaskSendDiagnostic = typeof taskSendDiagnostics[number];
+const taskSendErrors = new WeakMap<object, PilotTaskSendDiagnostic>();
+/** Bounded observation metadata, never evidence that a remote send did not occur.
+ * Preserve the original error identity without reading its fields or retaining it. */
+export function tagPilotTaskSendError(error: unknown, diagnostic: PilotTaskSendDiagnostic): unknown {
+  if (!taskSendDiagnostics.includes(diagnostic)) throw new Error("PILOT_TASK_SEND_DIAGNOSTIC_INVALID");
+  const tagged = error !== null && (typeof error === "object" || typeof error === "function") ? error : new Error("PILOT_TASK_SEND_UNKNOWN");
+  taskSendErrors.set(tagged, diagnostic); return tagged;
+}
+export type PilotDeliveryDiagnostic = PilotTaskSendDiagnostic | "send" | "send-result" | "readback" | "readback-shape" | "readback-mismatch"
   | "pre-dispatch-refused" | "persist-sending" | "persist-verified" | "persist-failed-terminal" | "persist-unknown";
 export function isPilotDeliveryDiagnostic(value: unknown): value is PilotDeliveryDiagnostic {
   return typeof value === "string" && ["send", "send-result", "readback", "readback-shape", "readback-mismatch",
-    "pre-dispatch-refused", "persist-sending", "persist-verified", "persist-failed-terminal", "persist-unknown"].includes(value);
+    "pre-dispatch-refused", "persist-sending", "persist-verified", "persist-failed-terminal", "persist-unknown", ...taskSendDiagnostics].includes(value);
 }
 export type PilotResult = Readonly<{
   state: "refused" | "verified" | "unknown" | "failed_terminal";
@@ -81,8 +94,9 @@ function dataSnapshot(value: unknown, required?: readonly string[], optional: re
   return result;
 }
 function snapshotReply(value: unknown, readback = false): PilotReply | PilotReadback {
-  const snapshot = dataSnapshot(value, ["chatId", "replyToMessageId", "text", ...(readback ? ["messageId", "accountId"] : [])], ["entities"]);
+  const snapshot = dataSnapshot(value, ["chatId", "replyToMessageId", "text", ...(readback ? ["messageId", "accountId"] : [])], ["entities", ...(readback ? ["taskReplyOriginMessageId"] : [])]);
   if (typeof snapshot.text !== "string") throw new Error("pilot-input-refused");
+  if (Object.hasOwn(snapshot, "taskReplyOriginMessageId") && (snapshot.replyToMessageId !== null || !messageIdValid(snapshot.taskReplyOriginMessageId as number))) throw new Error("pilot-input-refused");
   if (Object.hasOwn(snapshot, "entities")) snapshot.entities = copyTelegramTextEntities(snapshot.text, snapshot.entities as readonly TelegramTextEntity[]);
   return Object.freeze({ ...snapshot }) as PilotReply | PilotReadback;
 }
@@ -124,12 +138,13 @@ export async function runPilotReply(input: PilotReplyInput): Promise<PilotResult
   let reply: PilotReply;
   try {
     input = Object.freeze({ ...dataSnapshot(input) }) as unknown as PilotReplyInput;
-    approved = Object.freeze({ ...dataSnapshot(input.approved, ["chatId", "accountId", "replyToMessageId", "maximumTextBytes"]) }) as PilotReplyInput["approved"];
+    approved = Object.freeze({ ...dataSnapshot(input.approved, ["chatId", "accountId", "replyToMessageId", "maximumTextBytes"], ["taskReplyPolicy"]) }) as PilotReplyInput["approved"];
     reply = snapshotReply(input.reply);
   } catch { return { state: "refused", code: "input-refused" }; }
   if (typeof approved.chatId !== "string" || typeof approved.accountId !== "string" ||
       !/^-[1-9]\d{0,19}$/.test(approved.chatId) || !/^[1-9]\d{0,19}$/.test(approved.accountId) ||
       !(approved.replyToMessageId === null || messageIdValid(approved.replyToMessageId)) || !Number.isSafeInteger(approved.maximumTextBytes) ||
+      Object.hasOwn(approved, "taskReplyPolicy") && (approved.taskReplyPolicy !== "standalone-if-exact-missing" || !messageIdValid(approved.replyToMessageId as number)) ||
       approved.maximumTextBytes < 1 || approved.maximumTextBytes > 4096 ||
       reply.chatId !== approved.chatId || reply.replyToMessageId !== approved.replyToMessageId ||
       typeof reply.text !== "string" || !reply.text.trim() || reply.text.includes("\0") ||
@@ -156,9 +171,9 @@ export async function runPilotReply(input: PilotReplyInput): Promise<PilotResult
     contentHash,
     textBytes: Buffer.byteLength(reply.text, "utf8"),
   });
-  const record = (state: PilotState, messageId?: number): PilotRecord => Object.freeze({ ...base, state, ...(messageId === undefined ? {} : { messageId }) });
-  const persist = async (state: PilotState, messageId?: number) => {
-    try { await input.store.append(record(state, messageId)); return true; }
+  const record = (state: PilotState, messageId?: number, detached = false): PilotRecord => Object.freeze({ ...base, state, ...(messageId === undefined ? {} : { messageId }), ...(detached ? { wireReplyToMessageId: null } : {}) });
+  const persist = async (state: PilotState, messageId?: number, detached = false) => {
+    try { await input.store.append(record(state, messageId, detached)); return true; }
     catch { return false; }
   };
   try { await input.store.reserve(record("planned")); }
@@ -185,10 +200,12 @@ export async function runPilotReply(input: PilotReplyInput): Promise<PilotResult
     deliveryDiagnostic = "readback-shape";
     const received = snapshotReply(rawReceived, true) as PilotReadback;
     deliveryDiagnostic = "readback-mismatch";
+    const detached = approved.taskReplyPolicy === "standalone-if-exact-missing" && received.replyToMessageId === null && received.taskReplyOriginMessageId === base.replyToMessageId;
+    const exactAnchor = received.replyToMessageId === base.replyToMessageId && !Object.hasOwn(received, "taskReplyOriginMessageId");
     if (received.messageId !== sentId || received.chatId !== base.chatId ||
-        received.accountId !== base.accountId || received.replyToMessageId !== base.replyToMessageId ||
+        received.accountId !== base.accountId || !exactAnchor && !detached ||
         received.text !== reply.text || JSON.stringify(received.entities) !== JSON.stringify(reply.entities)) throw new Error("readback-mismatch");
-    if (!await persist("verified", sentId)) return { state: "unknown", code: "persistence-unknown", deliveryDiagnostic: "persist-verified" };
+    if (!await persist("verified", sentId, detached)) return { state: "unknown", code: "persistence-unknown", deliveryDiagnostic: "persist-verified" };
     return { state: "verified", code: "verified" };
   } catch (error) {
     // Only the trusted send boundary can prove no remote invocation occurred.
@@ -199,6 +216,8 @@ export async function runPilotReply(input: PilotReplyInput): Promise<PilotResult
         ? { state: "failed_terminal", code: "pre-dispatch-refused", deliveryDiagnostic: "pre-dispatch-refused" }
         : { state: "unknown", code: "persistence-unknown", deliveryDiagnostic: "persist-failed-terminal" };
     }
+    if (deliveryDiagnostic === "send" && error !== null && (typeof error === "object" || typeof error === "function") && !types.isProxy(error))
+      deliveryDiagnostic = taskSendErrors.get(error) ?? deliveryDiagnostic;
     return await persist("unknown")
       ? { state: "unknown", code: "send-or-readback-unknown", deliveryDiagnostic }
       : { state: "unknown", code: "persistence-unknown", deliveryDiagnostic: "persist-unknown" };
@@ -228,7 +247,7 @@ export function createEncryptedPilotStore(directory: string, passphrase: string,
   let state: PilotState | "unclaimed" | "blocked" = "unclaimed";
   let identity: string | undefined;
   let directoryIdentity: { dev: number; ino: number } | undefined;
-  const signature = (record: PilotRecord) => JSON.stringify({ ...record, state: undefined, messageId: undefined });
+  const signature = (record: PilotRecord) => JSON.stringify({ ...record, state: undefined, messageId: undefined, wireReplyToMessageId: undefined });
   async function write(record: PilotRecord): Promise<void> {
     const metadata = await lstat(directory);
     if (!metadata.isDirectory() || metadata.isSymbolicLink() || !directoryIdentity ||
@@ -252,6 +271,9 @@ export function createEncryptedPilotStore(directory: string, passphrase: string,
     if (busy || state === "blocked") throw new Error("pilot-store-consumed");
     busy = true;
     try {
+      const wire = Object.getOwnPropertyDescriptor(record, "wireReplyToMessageId");
+      if (wire && (!("value" in wire) || !wire.enumerable || wire.value !== null || record.state !== "verified" || !messageIdValid(record.replyToMessageId as number) || !messageIdValid(record.messageId!)))
+        throw new Error("pilot-store-wire-anchor-refused");
       if (reserve) {
         if (state !== "unclaimed" || record.state !== "planned") throw new Error("pilot-store-consumed");
         const parent = dirname(directory);

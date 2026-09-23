@@ -1,3 +1,4 @@
+import { STANDING_INCOMING_TEXT_BYTES } from "./standing-context.js";
 import { scrypt } from "node:crypto";
 import { types } from "node:util";
 import type { PilotBinding, PilotPrimary } from "./pilot-telegram-adapter.js";
@@ -129,7 +130,7 @@ export async function openStandingOwnActionMemory(input: Readonly<{
     forPrimary(value: Readonly<{primary:PilotPrimary;asOf:number}>): StandingOwnActionContextPage {
       live(); const v = record(value, ["primary", "asOf"]), p = record(v.primary, ["chatId", "ownerId", "messageId", "text"]);
       if (p.chatId !== binding.peerId || !userId(p.ownerId) || references.speaker(p.ownerId) === "neurobro" ||
-          !Number.isInteger(p.messageId) || Number(p.messageId) < 1 || Number(p.messageId) > 2147483647 || !validText(p.text, 4096, 1) ||
+          !Number.isInteger(p.messageId) || Number(p.messageId) < 1 || Number(p.messageId) > 2147483647 || !validText(p.text, STANDING_INCOMING_TEXT_BYTES, 1) ||
           !Number.isSafeInteger(v.asOf) || Number(v.asOf) < 1 || Number(v.asOf) > 253402300799) return fail();
       const primary = Object.freeze({ chatId: p.chatId, ownerId: p.ownerId, messageId: Number(p.messageId), text: p.text }), asOf = Number(v.asOf);
       // Recency is local observation order, not Telegram chronology. Query recall

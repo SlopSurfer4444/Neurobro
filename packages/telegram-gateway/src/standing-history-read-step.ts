@@ -36,10 +36,13 @@ export async function runStandingHistoryReadStep(value: StandingHistoryReadStepI
   const args = data(value, ["intent", "directories", "passphrase", "ticket", "expectedSourceHead", "expectedControlHead", "signal"]);
   let intent: StandingHistoryTaskIntent;
   try { intent = snapshotStandingHistoryTaskIntent(args.intent); } catch { return fail("input"); }
-  const dirs = data(args.directories, ["pages", "control"]), ticket = data(args.ticket, ["openHistoryTask"], ["openTaskReply"]), openTask = method(ticket.openHistoryTask);
-  // The shared ticket may also offer final delivery. Validate that inert member,
-  // but borrow only the read capability; this step never admits a send.
-  if (Object.hasOwn(ticket, "openTaskReply")) method(ticket.openTaskReply);
+  const dirs = data(args.directories, ["pages", "control"]), ticket = data(args.ticket, ["openHistoryTask"], ["openTaskReply", "openObservedSource", "openObservedHistoryTask", "openCommunityAlert"]);
+  const openTask = method(intent.source ? ticket.openObservedHistoryTask : ticket.openHistoryTask);
+  // The shared one-use ticket may offer other host-owned background work.
+  // Validate those inert members without invoking them; this step consumes
+  // only the intent-selected durable history capability, never a send capability.
+  for (const name of ["openHistoryTask", "openTaskReply", "openObservedSource", "openObservedHistoryTask", "openCommunityAlert"])
+    if (Object.hasOwn(ticket, name)) method(ticket[name]);
   for (const path of Object.values(dirs)) if (typeof path !== "string" || !isAbsolute(path) || resolve(path) !== path) return fail("input");
   const directories = Object.freeze({ pages: dirs.pages as string, control: dirs.control as string });
   for (const [a, b] of [[directories.pages, directories.control], [directories.control, directories.pages]] as const) {
@@ -94,7 +97,7 @@ export async function runStandingHistoryReadStep(value: StandingHistoryReadStepI
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) return cancelled();
     phase = "read";
-    const result = snapshotStandingHistoryTaskPage(await Reflect.apply(read, leaseValue, []));
+    const result = snapshotStandingHistoryTaskPage(await Reflect.apply(read, leaseValue, []), intent);
     phase = "close"; await closeLease(); await closeStores();
     phase = "storage";
     const current = await reopen(); if ("kind" in current) return current;

@@ -14,12 +14,12 @@ function dialog(peerId: string, title: string): DialogSummary {
 }
 
 test("matches one exact dialog title without substring fallback", () => {
-  const dialogs = [dialog("1", "Тестовый диалог"), dialog("2", "Тестовый диалог архив")];
-  assert.equal(findExactDialogByTitle(dialogs, "тестовый диалог").peerId, "1");
-  assert.throws(() => findExactDialogByTitle(dialogs, "Тест"), /No exact dialog/);
+  const dialogs = [dialog("1", "Матушка"), dialog("2", "Матушка работа")];
+  assert.equal(findExactDialogByTitle(dialogs, "матушка").peerId, "1");
+  assert.throws(() => findExactDialogByTitle(dialogs, "Мат"), /No exact dialog/);
 });
 
 test("refuses duplicate exact dialog titles", () => {
-  const dialogs = [dialog("1", "Тестовый диалог"), dialog("2", "тестовый диалог")];
-  assert.throws(() => findExactDialogByTitle(dialogs, "Тестовый диалог"), /ambiguous/);
+  const dialogs = [dialog("1", "Матушка"), dialog("2", "матушка")];
+  assert.throws(() => findExactDialogByTitle(dialogs, "Матушка"), /ambiguous/);
 });

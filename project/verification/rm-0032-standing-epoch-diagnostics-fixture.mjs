@@ -9,30 +9,34 @@ const {REPOSITORY_TOOL_SPECS}=await import(new URL('../../packages/telegram-gate
 const {BOUND_ACTION_TOOL_SPECS}=await import(new URL('../../packages/telegram-gateway/dist/src/bound-action-tools.js',import.meta.url).href);
 const {STANDING_ARTIFACT_TOOL_SPECS}=await import(new URL('../../packages/telegram-gateway/dist/src/standing-artifact-tools.js',import.meta.url).href);
 const {HISTORY_TASK_TOOL_SPECS}=await import(new URL('../../packages/telegram-gateway/dist/src/standing-history-task-tools.js',import.meta.url).href);
+const {STANDING_CHAT_SEARCH_TOOL_SPEC}=await import(new URL('../../packages/telegram-gateway/dist/src/standing-chat-search.js',import.meta.url).href);
+const chatSearchSpec=JSON.parse(JSON.stringify(STANDING_CHAT_SEARCH_TOOL_SPEC));
 const historyTaskSpecs=JSON.parse(JSON.stringify(HISTORY_TASK_TOOL_SPECS));
 const repositorySpecs=JSON.parse(JSON.stringify(REPOSITORY_TOOL_SPECS));
 const boundActionSpecs=JSON.parse(JSON.stringify(BOUND_ACTION_TOOL_SPECS));
 const artifactSpecs=JSON.parse(JSON.stringify(STANDING_ARTIFACT_TOOL_SPECS));
 const names=['standing-image-client','managed-custody-client','astra-canary-client','native-conversation','native-rpc','native-image-collector',
-  'native-image-epoch','native-epoch-session','native-epoch-rpc','native-epoch-managed-rpc','native-epoch-idle','standing-epoch-client','standing-epoch-client.test','native-scoped-epoch.test','native-conversation.test','native-epoch-session.test'];
+  'native-image-epoch','native-epoch-session','native-epoch-rpc','native-epoch-managed-rpc','native-epoch-idle','standing-epoch-client','standing-epoch-client.test','native-scoped-epoch.test','native-conversation.test','native-epoch-session.test']
+  .filter(name=>mode!=='--receipts'||!['standing-image-client','native-scoped-epoch.test','native-conversation.test','native-epoch-session.test'].includes(name));
 const files=names.map(n=>{const name='rm-0032-'+n+'.py',bytes=readFileSync(new URL('./'+name,import.meta.url));
   assert.ok(Buffer.from(bytes.toString('utf8')).equals(bytes));return{name,source:bytes.toString('utf8'),sha256:createHash('sha256').update(bytes).digest('hex')};});
-const raw=Buffer.from(JSON.stringify({files,mode,repositorySpecs,boundActionSpecs,artifactSpecs,historyTaskSpecs}));assert.ok(raw.length<=589824);
+const raw=Buffer.from(JSON.stringify({files,mode,repositorySpecs,boundActionSpecs,artifactSpecs,historyTaskSpecs,chatSearchSpec}));assert.ok(raw.length<=589824);
 const input=deflateSync(raw);assert.ok(input.length<=262144);
 const bootstrap=`import copy,hashlib,json,os,pathlib,runpy,sys,tempfile,zlib,unittest,types
 packed=sys.stdin.buffer.read(262145);assert len(packed)<=262144
 d=zlib.decompressobj();raw=d.decompress(packed,589825)
 assert len(raw)<=589824 and d.eof and not d.unused_data and not d.unconsumed_tail
-p=json.loads(raw);assert set(p)=={'files','mode','repositorySpecs','boundActionSpecs','artifactSpecs','historyTaskSpecs'} and p['mode'] in {'--tests','--receipts'}
+p=json.loads(raw);assert set(p)=={'files','mode','repositorySpecs','boundActionSpecs','artifactSpecs','historyTaskSpecs','chatSearchSpec'} and p['mode'] in {'--tests','--receipts'}
 assert type(p['repositorySpecs']) is list and type(p['boundActionSpecs']) is list and type(p['artifactSpecs']) is list and type(p['historyTaskSpecs']) is list
-os.environ['NEUROBRO_GENERATED_TOOL_SPECS']=json.dumps({'actions':p['boundActionSpecs'],'repository':p['repositorySpecs'],'artifacts':p['artifactSpecs'],'historyTasks':p['historyTaskSpecs']},separators=(',',':'))
+assert type(p['chatSearchSpec']) is dict
+os.environ['NEUROBRO_GENERATED_TOOL_SPECS']=json.dumps({'actions':p['boundActionSpecs'],'repository':p['repositorySpecs'],'artifacts':p['artifactSpecs'],'historyTasks':p['historyTaskSpecs'],'chatSearch':p['chatSearchSpec']},separators=(',',':'))
 expected=${JSON.stringify(names)}
 expected={'rm-0032-'+n+'.py' for n in expected}
 assert len(p['files'])==len(expected) and {f['name'] for f in p['files']}==expected
 with tempfile.TemporaryDirectory(prefix='neurobro-epoch-idle-fixture-') as directory:
  for f in p['files']:
   assert set(f)=={'name','source','sha256'} and type(f['source']) is str
-  data=f['source'].encode();assert len(data)<=131072 and hashlib.sha256(data).hexdigest()==f['sha256']
+  data=f['source'].encode();assert len(data)<=147456 and hashlib.sha256(data).hexdigest()==f['sha256']
   pathlib.Path(directory,f['name']).write_bytes(data)
  x=runpy.run_path(str(pathlib.Path(directory,'rm-0032-standing-epoch-client.test.py')))
  if p['mode']=='--tests':

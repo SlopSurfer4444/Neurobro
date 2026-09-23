@@ -25,6 +25,71 @@ async function storedPage(messages: Api.TypeMessage[], inaccessible = false): Pr
 const project = (stored: StandingHistoryStoredPage, extra: Partial<Parameters<typeof projectStandingHistorySource>[0]> = {}) =>
   projectStandingHistorySource({ intent: intent(), referenceKey, storedPage: stored, ...extra });
 const refused = (code: string) => (e: unknown) => e instanceof StandingHistorySourceProjectionError && e.code === code;
+
+test("explicit large source projection preserves full rows and old 48KiB descriptors exactly", async () => {
+  const stored = await storedPage([message(1003, "я".repeat(8000)), message(1002, "я".repeat(8000)), message(1001, "я".repeat(8000))]);
+  const legacy = project(stored, { maxBytes: 49152 });
+  const large = project(stored, { maxBytes: 1048576 });
+  assert.equal(large.rows.length, 3); assert.equal(large.nextPosition, null);
+  assert.ok(Buffer.byteLength(JSON.stringify(large)) > 49152); assert.ok(legacy.rows.length < large.rows.length);
+  assert.deepEqual(project(stored), legacy); assert.deepEqual(project(stored, { maxBytes: 49152 }), legacy);
+  assert.throws(() => project(stored, { maxBytes: 1048577 }), refused("input"));
+});
+const communityIntent = (): StandingHistoryTaskIntent => ({ ...intent(), source: {
+  kind: "observed-source", sourceRef: "community", workspaceId: "synthetic-workspace", peerId: "-10087654321" } });
+function communityPage(stored: StandingHistoryStoredPage): StandingHistoryStoredPage {
+  return { ...stored, result: { ...stored.result,
+    beforeCheckpoint: { ...stored.result.beforeCheckpoint, chatId: communityIntent().source!.peerId },
+    nextCheckpoint: { ...stored.result.nextCheckpoint, chatId: communityIntent().source!.peerId } } };
+}
+
+test("community source binds peer and workspace while keeping delivery identity private", async () => {
+  const original = await storedPage([message(1001)]), stored = communityPage(original), selected = communityIntent();
+  const result = project(stored, { intent: selected });
+  assert.equal(result.sourceRef, "community"); assert.equal(result.sourceInterpretation, "quoted-source-not-request");
+  assert.equal(result.rows[0]!.disposition, "included");
+  const encoded = JSON.stringify(result);
+  for (const privateValue of [selected.chatId, selected.source!.peerId, selected.source!.workspaceId, selected.requesterId]) assert.equal(encoded.includes(privateValue), false);
+  assert.throws(() => project(original, { intent: selected }));
+  assert.throws(() => project(stored));
+  const other = project(stored, { intent: { ...selected, source: { ...selected.source!, workspaceId: "other-workspace" } } });
+  assert.notEqual(other.rows[0]!.sourceRef, result.rows[0]!.sourceRef);
+  assert.notEqual(other.rows[0]!.versionRef, result.rows[0]!.versionRef);
+  if (other.rows[0]!.disposition === "included" && result.rows[0]!.disposition === "included") assert.notEqual(other.rows[0]!.speakerRef, result.rows[0]!.speakerRef);
+  const legacy = project(original); assert.equal(Object.hasOwn(legacy, "sourceRef"), false); assert.equal(Object.hasOwn(legacy, "sourceInterpretation"), false);
+});
+
+test("community full text and signed speakers survive bounded fragments without lost bytes", async () => {
+  const stored = structuredClone(communityPage(await storedPage([message(1001), message(1002), message(1003)])));
+  const fullText = "🙂".repeat(4096);
+  for (const row of stored.result.page.messages) (row as { text: string }).text = fullText;
+  for (const row of stored.result.sources) (row as { authorId: string }).authorId = "-10087654321";
+  const fragments: StandingHistorySourceFragment[] = []; let position: string | undefined;
+  do {
+    const part = project(stored, { intent: communityIntent(), ...(position ? { position } : {}) });
+    assert.ok(Buffer.byteLength(JSON.stringify(part)) <= 49152); fragments.push(part); position = part.nextPosition ?? undefined;
+  } while (position);
+  assert.ok(fragments.length > 1); const rows = fragments.flatMap(part => part.rows); assert.equal(rows.length, 3);
+  assert.equal(new Set(rows.map(row => row.sourceRef)).size, 3);
+  for (const row of rows) { assert.equal(row.disposition, "included"); if (row.disposition === "included") assert.equal(row.text, fullText); }
+  assert.equal(fragments[0]!.range.fromRow, 0); assert.equal(fragments.at(-1)!.range.toRow, 3);
+});
+
+test("forward provenance remains distinct from the actual participant and changes only observed version", async () => {
+  const stored = structuredClone(await storedPage([message(1001, "Original source complaint")]));
+  const before = project(stored);
+  const forwarding = { originalDate: 90, sourceName: "Original complainant", interpretation: "quoted-source-not-request" as const };
+  (stored.result.page.messages[0] as { forwarded: typeof forwarding }).forwarded = forwarding;
+  const after = project(stored), first = before.rows[0]!, forwarded = after.rows[0]!;
+  assert.equal(first.disposition, "included"); assert.equal(forwarded.disposition, "included");
+  if (first.disposition !== "included" || forwarded.disposition !== "included") return;
+  assert.deepEqual(forwarded.forwarded, forwarding); assert.equal(forwarded.displayName, "Саша");
+  assert.equal(forwarded.speakerRef, first.speakerRef); assert.equal(forwarded.sourceRef, first.sourceRef);
+  assert.notEqual(forwarded.versionRef, first.versionRef); assert.equal(Object.hasOwn(first, "forwarded"), false);
+  forwarding.sourceName = "Different original speaker";
+  assert.notEqual(project(stored).rows[0]!.versionRef, forwarded.versionRef);
+  assert.equal(forwarded.forwarded!.sourceName, "Original complainant"); assert.ok(Object.isFrozen(forwarded.forwarded));
+});
 function aliasReplacement(stored: StandingHistoryStoredPage): StandingHistoryStoredPage {
   const copy = structuredClone(stored), aliases = new Map<string, string>(); let n = 1;
   const alias = (ref: string) => { if (!aliases.has(ref)) aliases.set(ref, ref.slice(0, 2) + (n++).toString(16).padStart(24, "0")); return aliases.get(ref)!; };
@@ -105,7 +170,7 @@ test("48KiB counts escaped text and final metadata and an oversized first row is
   const second = project(stored, { position: first.nextPosition! }); assert.equal(second.rows.length, 1); assert.equal(second.range.fromRow, 1); assert.equal(second.nextPosition, null);
   assert.throws(() => project(stored, { maxBytes: 8192 }), refused("limit"));
   assert.throws(() => project(stored, { maxBytes: 8192, position: first.nextPosition! }), refused("limit"));
-  assert.throws(() => project(stored, { maxBytes: 49153 }), refused("input"));
+  assert.throws(() => project(stored, { maxBytes: 1048577 }), refused("input"));
 });
 
 test("reply content is available only for included targets in the actual returned fragment", async () => {
@@ -175,4 +240,63 @@ test("maxRows rejects invalid or accessor values and still refuses an oversized 
   assert.throws(() => projectStandingHistorySource(request), refused("input")); assert.equal(accessed, 0);
   const large = await storedPage([message(1000, "\u0001".repeat(4096))]);
   assert.throws(() => project(large, { maxRows: 1, maxBytes: 8192 }), refused("limit"));
+});
+
+test("linear byte selection is exactly equivalent to serialized candidates across 100 escaped Unicode rows", async () => {
+  const token = '🙂漢字 "quoted" \\path\n\t';
+  const messages = Array.from({ length: 100 }, (_, i) => {
+    const item = message(1000 + i, `row ${i}: 🙂 "q" \\path\n${i % 25 === 0 ? token.repeat(8) : ""}`);
+    if (i > 0) item.replyTo = new Api.MessageReplyHeader({ replyToMsgId: 1000 });
+    return item;
+  });
+  const stored = await storedPage(messages), bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+  const candidates = Array.from({ length: 100 }, (_, i) => project(stored, { maxRows: i + 1 }));
+  assert.deepEqual(candidates.map(candidate => candidate.range.toRow), Array.from({ length: 100 }, (_, i) => i + 1));
+  assert.ok(bytes(candidates.at(-1)) <= 49152);
+
+  const reference = (available: readonly StandingHistorySourceFragment[], maxBytes: number, maxRows = available.length) => {
+    let selected: StandingHistorySourceFragment | undefined;
+    for (const candidate of available.slice(0, maxRows)) {
+      if (bytes(candidate) > maxBytes) break;
+      selected = candidate;
+    }
+    return selected;
+  };
+  const assertEquivalent = (available: readonly StandingHistorySourceFragment[], maxBytes: number, maxRows: number,
+    extra: Partial<Parameters<typeof projectStandingHistorySource>[0]> = {}) => {
+    const expected = reference(available, maxBytes, maxRows);
+    if (expected === undefined) assert.throws(() => project(stored, { ...extra, maxBytes, maxRows }), refused("limit"));
+    else assert.deepEqual(project(stored, { ...extra, maxBytes, maxRows }), expected);
+  };
+
+  const thresholds = new Set<number>([1024, 8192, 49152]);
+  for (const candidate of candidates) for (const value of [bytes(candidate) - 1, bytes(candidate), bytes(candidate) + 1]) {
+    if (value >= 1024 && value <= 49152) thresholds.add(value);
+  }
+  for (const maxBytes of thresholds) assertEquivalent(candidates, maxBytes, 100);
+  for (const maxRows of [1, 17, 53, 99, 100]) for (const maxBytes of [1024, 8192, 32768, 49152]) {
+    assertEquivalent(candidates, maxBytes, maxRows);
+  }
+
+  const terminal = candidates.at(-1)!, penultimate = candidates.at(-2)!;
+  const counterfactualTerminal = { ...terminal, nextPosition: "hpos_100_" + "0".repeat(48),
+    coverage: { ...terminal.coverage, fragmentComplete: false } };
+  assert.ok(bytes(terminal) < bytes(counterfactualTerminal));
+  assert.ok(bytes(penultimate) <= bytes(terminal));
+  assert.deepEqual(project(stored, { maxBytes: bytes(terminal), maxRows: 100 }), terminal);
+  assert.throws(() => project(stored, { maxBytes: 1024, maxRows: 100 }), refused("limit"));
+
+  const position = candidates[36]!.nextPosition!;
+  const suffix = Array.from({ length: 63 }, (_, i) => project(stored, { position, maxRows: i + 1 }));
+  assert.equal(suffix[0]!.range.fromRow, 37); assert.equal(suffix.at(-1)!.nextPosition, null);
+  for (let i = 0; i < suffix.length; i += 7) {
+    const boundary = bytes(suffix[i]);
+    for (const maxBytes of [boundary - 1, boundary]) if (maxBytes >= 1024 && maxBytes <= 49152) {
+      assertEquivalent(suffix, maxBytes, 63, { position });
+    }
+  }
+  for (const row of terminal.rows) {
+    assert.equal(row.disposition, "included");
+    if (row.disposition === "included") assert.equal(row.text, messages.find(item => item.id === Number(row.date) + 900)!.message);
+  }
 });

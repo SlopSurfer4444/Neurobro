@@ -13,11 +13,12 @@ import threading
 import time
 
 MIB = 1024 * 1024
-# Per turn: full image lifecycle echoes, history lifecycle and ordinary events.
+# Per turn: maximum of 50.25MiB foreground image/event traffic and
+# 66MiB isolated analysis lifecycle/event traffic.
 # Additional 8MiB covers custody, ACKs and bounded post-turn notifications. This
 # is cumulative traffic, not retained memory; existing frame/queue caps remain.
-RAW_READ_CAP = 16 * (48 * MIB + 2 * MIB + 262144) + 8 * MIB
-RAW_WRITE_CAP = 16 * (MIB + 65536) + MIB
+RAW_READ_CAP = 16 * (64 * MIB + 2 * MIB) + 8 * MIB
+RAW_WRITE_CAP = 16 * (18 * MIB + 65536) + MIB
 VISUAL_WRITE_CAP = 16 * 12 * MIB
 CLEANUP_READ_CAP = 8 * MIB
 WAIT_SLICE = .05
@@ -67,7 +68,7 @@ def create_managed_rpc_class(base, idle_module):
 
         def _check(self):
             super()._check()
-            if self._cancel.is_set(): self._fail("TRANSPORT_UNKNOWN", True, "phase")
+            if self._cancel.is_set(): self._fail("TRANSPORT_UNKNOWN", True, "cancelled")
 
         def _ingest(self):
             self._check()
@@ -232,16 +233,20 @@ SCOPED_PURPOSES = ("conversation", "history-analysis")
 
 
 class ScopedManagedDeadlineRpc(ManagedDeadlineRpc):
-    """Opt-in two-slot coordinator; one actual RPC/reader and one active turn.
+    """Two-slot v1 or explicit three-slot v2; one RPC/reader and active turn.
 
     A slot is host-private, not a model-selected transport. This coordinator
     reserves before dispatch, never retries unknown writes, and has the SAME
     aggregate epoch/turn bounds as the legacy single-thread wrapper.
     """
-    def __init__(self, rpc, idle_registry, clock=time.monotonic):
+    def __init__(self, rpc, idle_registry, clock=time.monotonic, *, protocol="standing-scoped-epoch-v1"):
+        if type(protocol) is not str or protocol not in ("standing-scoped-epoch-v1", "standing-scoped-epoch-v2"):
+            raise ManagedDeadlineError("PHASE_REFUSED")
         super().__init__(rpc, clock)
+        self.protocol = protocol
+        purposes = SCOPED_PURPOSES + (("community-assessment",) if protocol == "standing-scoped-epoch-v2" else ())
         self.idle_registry = idle_registry
-        self._slots = {p: {"thread": None, "started": False, "turns": 0, "responses": []} for p in SCOPED_PURPOSES}
+        self._slots = {p: {"thread": None, "started": False, "turns": 0, "responses": []} for p in purposes}
         self._admitted, self._active, self._retired = 0, None, False
         self._seen_refs = set()
 
@@ -255,12 +260,13 @@ class ScopedManagedDeadlineRpc(ManagedDeadlineRpc):
         self.remaining()
         self._need(self.epoch and not self._retired and self._active is None and type(purpose) is str and purpose in self._slots)
         self._need(type(request_ref) is str and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", request_ref) is not None and request_ref not in self._seen_refs)
-        if self._admitted >= 16 or self.deadline - self._now() < 300:
+        turn_seconds = 30 if purpose == "community-assessment" else 300
+        if self._admitted >= 16 or self.deadline - self._now() < turn_seconds:
             self._retired = True
             return {"kind": "notAdmitted", "requestRef": request_ref, "reason": "turns" if self._admitted >= 16 else "time", "turnsAdmitted": self._admitted}
         self._seen_refs.add(request_ref); self._admitted += 1
         self._active = {"purpose": purpose, "requestRef": request_ref, "number": self._admitted,
-                        "deadline": min(self.deadline, self._now() + 300), "dispatched": False, "completed": False,
+                        "deadline": min(self.deadline, self._now() + turn_seconds), "dispatched": False, "completed": False,
                         "threadsBefore": self._threads, "turnsBefore": self._turns}
         return self._admitted
 
@@ -285,7 +291,7 @@ class ScopedManagedDeadlineRpc(ManagedDeadlineRpc):
                 owner._need(not active["completed"] and type(params) is dict)
                 limit = owner._turn_remaining(purpose, seconds)
                 if method == "thread/start":
-                    owner._need(not slot["started"] and owner._threads < 2 and not active["dispatched"])
+                    owner._need(not slot["started"] and owner._threads < len(owner._slots) and not active["dispatched"])
                     slot["started"] = True; owner._threads += 1
                 elif method == "turn/start":
                     owner._need(slot["thread"] is not None and params.get("threadId") == slot["thread"] and not active["dispatched"] and owner._turns < 16)
@@ -354,7 +360,7 @@ class ScopedManagedDeadlineRpc(ManagedDeadlineRpc):
     def release_turn(self, purpose, request_ref, delivery):
         active = self._current(purpose)
         self._need(active["requestRef"] == request_ref and active["completed"] and delivery in ("verified", "not-sent", "unknown") and
-                   (purpose != "history-analysis" or delivery == "not-sent"))
+                   (purpose == "conversation" or delivery == "not-sent"))
         self._active = None
         if delivery == "unknown": self._retired = True
 

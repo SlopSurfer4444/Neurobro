@@ -1,3 +1,4 @@
+import { MATERIAL_BYTES, LEGACY_MATERIAL_BYTES, MAX_ANALYSIS_NODES, MAX_SUPPORTS, SUMMARY_BYTES, MAX_CLAIMS } from "./standing-history-analysis-limits.js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { types } from "node:util";
 import type { StandingHistoryAnalysisNode, StandingHistoryAnalysisOutput, StandingHistoryAnalysisSpan } from "./standing-history-analysis-store.js";
@@ -21,15 +22,15 @@ export type StandingHistoryNodeNotes = Readonly<{
   supportScope: "immediate-node-claims-only";
 }>;
 export type StandingHistoryMergeView = Readonly<{ schema: "standing-history-merge-view-v1";
-  children: readonly [StandingHistoryNodeNotes, StandingHistoryNodeNotes]; detailCoverage: "complete" | "partial";
+  children: readonly [StandingHistoryNodeNotes, StandingHistoryNodeNotes, ...StandingHistoryNodeNotes[]]; detailCoverage: "complete" | "partial";
   claimsStatus: "model-authored-unverified" }>;
 export type StandingHistoryNodeNotesRequest = Readonly<{ node: StandingHistoryAnalysisNode; referenceKey: string; position?: string; maxBytes?: number }>;
-export type StandingHistoryMergeViewRequest = Readonly<{ children: readonly [StandingHistoryAnalysisNode, StandingHistoryAnalysisNode]; referenceKey: string; maxBytes?: number }>;
+export type StandingHistoryMergeViewRequest = Readonly<{ children: readonly StandingHistoryAnalysisNode[]; referenceKey: string; maxBytes?: number; preferComplete?: boolean }>;
 export class StandingHistoryAnalysisViewError extends Error {
   constructor(readonly code: "input" | "position" | "limit" | "binding") { super("STANDING_HISTORY_ANALYSIS_VIEW_" + code.toUpperCase()); }
 }
 const fail = (code: StandingHistoryAnalysisViewError["code"]): never => { throw new StandingHistoryAnalysisViewError(code); };
-const DOMAIN = "DecadansNeurobro/standing-history-analysis-view/v1", MAX_BYTES = 49152;
+const DOMAIN = "DecadansNeurobro/standing-history-analysis-view/v1", MAX_BYTES = LEGACY_MATERIAL_BYTES;
 const ref = (v: unknown, p: string): v is string => typeof v === "string" && new RegExp("^" + p + "_[0-9a-f]{48}$", "u").test(v);
 const digest = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v);
 const bytes = (v: unknown) => Buffer.byteLength(JSON.stringify(v));
@@ -69,9 +70,9 @@ function inert(v: unknown, depth = 0): unknown {
 function snapshot(v: unknown) {
   const n = data(v, ["nodeRef", "kind", "index", "hash", "inputs", "coverage", "output"]);
   if (!ref(n.nodeRef, "hnode") || !digest(n.hash) || !["leaf", "merge"].includes(n.kind as string) || !Number.isInteger(n.index) || Number(n.index) < 1 || Number(n.index) > 1024) return fail("input");
-  const o = data(n.output, ["summary", "claims"], ["omittedDetailCount"]), summary = text(o.summary, 4096);
+  const o = data(n.output, ["summary", "claims"], ["omittedDetailCount"]), summary = text(o.summary, SUMMARY_BYTES);
   if (Object.hasOwn(o, "omittedDetailCount") && (!Number.isSafeInteger(o.omittedDetailCount) || Number(o.omittedDetailCount) < 0)) return fail("input");
-  const claims = array(o.claims, 16).map(value => {
+  const claims = array(o.claims, MAX_CLAIMS).map(value => {
     const c = data(value, ["kind", "text", "supports"]);
     if (!["reported", "decision", "open-question", "inference"].includes(c.kind as string)) return fail("input");
     const supports = array(c.supports, 16).map(value => { const s = data(value, ["sourceRef", "versionRef"]);
@@ -80,7 +81,7 @@ function snapshot(v: unknown) {
     if (!supports.length || new Set(supports.map(s => s.sourceRef + ":" + s.versionRef)).size !== supports.length) return fail("input");
     return Object.freeze({ kind: c.kind as Claim["kind"], text: text(c.text, 1024), supports: Object.freeze(supports) });
   });
-  const spans = array(n.coverage, 8192).map(value => {
+  const spans = array(n.coverage, MAX_SUPPORTS).map(value => {
     const s = data(value, ["materialRef", "pageIndex", "pageHash", "range", "coverage"]), r = data(s.range, ["fromRow", "toRow", "totalRows"]);
     if (!ref(s.materialRef, "hmat") || !digest(s.pageHash) || !Number.isInteger(s.pageIndex) || Number(s.pageIndex) < 1 || Number(s.pageIndex) > 1024 ||
         [r.fromRow, r.toRow, r.totalRows].some(x => !Number.isInteger(x)) || Number(r.fromRow) < 0 || Number(r.toRow) < Number(r.fromRow) || Number(r.totalRows) < Number(r.toRow) || Number(r.totalRows) > 100) return fail("input");
@@ -92,7 +93,7 @@ function snapshot(v: unknown) {
     modelAuthoredOmittedDetailCount: Object.hasOwn(o, "omittedDetailCount") ? o.omittedDetailCount as number : null };
 }
 function budget(v: unknown) { if (v === undefined) return MAX_BYTES;
-  if (!Number.isSafeInteger(v) || Number(v) < 1024 || Number(v) > MAX_BYTES) return fail("input"); return Number(v); }
+  if (!Number.isSafeInteger(v) || Number(v) < 1024 || Number(v) > MATERIAL_BYTES) return fail("input"); return Number(v); }
 
 /** Pure views of already authenticated store nodes; supplied hashes are NOT
  * authentication. Host resolves nodes and owns the key. No file/Telegram/model
@@ -100,7 +101,7 @@ function budget(v: unknown) { if (v === undefined) return MAX_BYTES;
  * omitted descendants do not become admissible ancestor supports by reading. */
 export function readNodeNotes(value: StandingHistoryNodeNotesRequest): StandingHistoryNodeNotes {
   const args = data(value, ["node", "referenceKey"], ["position", "maxBytes"]), maxBytes = budget(args.maxBytes);
-  if (!digest(args.referenceKey) || Object.hasOwn(args, "position") && (typeof args.position !== "string" || !/^hnpos_(?:0|[1-9]\d{0,3})_(?:0|[1-9]\d?)_[0-9a-f]{48}$/u.test(args.position))) return fail("input");
+  if (!digest(args.referenceKey) || Object.hasOwn(args, "position") && (typeof args.position !== "string" || !/^hnpos_(?:0|[1-9]\d{0,4})_(?:0|[1-9]\d{0,2})_[0-9a-f]{48}$/u.test(args.position))) return fail("input");
   const n = snapshot(args.node), key = Buffer.from(args.referenceKey, "hex");
   try {
     const scope = hash(n), mac = (kind: string, offsets: readonly number[]) => createHmac("sha256", key).update(canonical([DOMAIN, kind, scope, offsets])).digest("hex").slice(0, 48);
@@ -129,7 +130,7 @@ export function readNodeNotes(value: StandingHistoryNodeNotesRequest): StandingH
     // Reserve room for atomic claims even when summary JSON escaping expands 6x.
     // Offsets advance independently, so subsequent pages retrieve BOTH suffixes.
     let endByte = startByte, endClaim = startClaim;
-    const summaryBudget = Math.min(8192, Math.floor(maxBytes / 3));
+    const summaryBudget = Math.min(maxBytes > LEGACY_MATERIAL_BYTES ? SUMMARY_BYTES * 6 + 128 : 8192, Math.floor(maxBytes / 3));
     const candidates = boundaries.filter(b => b > startByte);
     let low = 0, high = candidates.length;
     while (low < high) { const middle = Math.ceil((low + high) / 2), b = candidates[middle - 1]!;
@@ -148,8 +149,19 @@ export function readNodeNotes(value: StandingHistoryNodeNotesRequest): StandingH
  * Original notes stay in the ledger. Use each child's nextPosition with the
  * authenticated same child and readNodeNotes; no child-selector authority here. */
 export function projectMergeView(value: StandingHistoryMergeViewRequest): StandingHistoryMergeView {
-  const args = data(value, ["children", "referenceKey"], ["maxBytes"]), maxBytes = budget(args.maxBytes), nodes = array(args.children, 2);
-  if (nodes.length !== 2 || !digest(args.referenceKey)) return fail("input");
+  const args = data(value, ["children", "referenceKey"], ["maxBytes", "preferComplete"]), maxBytes = budget(args.maxBytes), nodes = array(args.children, MAX_ANALYSIS_NODES);
+  if (nodes.length < 2 || !digest(args.referenceKey) || Object.hasOwn(args, "preferComplete") && typeof args.preferComplete !== "boolean") return fail("input");
+  if (new Set(nodes.map(node => snapshot(node).nodeRef)).size !== nodes.length) return fail("binding");
+  // Opt-in packing leaves the historical pair projection byte-for-byte stable
+  // for reconstruction of already reserved attempts. Larger groups are admitted
+  // only when every child's original notes are completely represented.
+  if (args.preferComplete === true || nodes.length > 2) {
+    const complete = nodes.map(node => readNodeNotes({ node: node as StandingHistoryAnalysisNode, referenceKey: args.referenceKey as string, ...(maxBytes > LEGACY_MATERIAL_BYTES ? { maxBytes } : {}) })) as [StandingHistoryNodeNotes, StandingHistoryNodeNotes, ...StandingHistoryNodeNotes[]];
+    const packed: StandingHistoryMergeView = Object.freeze({ schema: "standing-history-merge-view-v1", children: Object.freeze(complete),
+      detailCoverage: complete.every(child => child.detailCoverage === "complete") ? "complete" : "partial", claimsStatus: "model-authored-unverified" });
+    if (packed.detailCoverage === "complete" && bytes(packed) <= maxBytes) return packed;
+    if (nodes.length > 2) return fail("limit");
+  }
   // Account for the entire wrapper before fairly allocating the remaining bytes.
   const envelope = { schema: "standing-history-merge-view-v1", children: [] as unknown[], detailCoverage: "complete", claimsStatus: "model-authored-unverified" };
   const childBudget = Math.floor((maxBytes - bytes(envelope) - 1) / 2);

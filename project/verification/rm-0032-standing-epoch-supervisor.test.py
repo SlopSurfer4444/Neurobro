@@ -10,13 +10,14 @@ import os
 from pathlib import Path
 import queue
 import stat
+import sys
 import types
 import unittest
 import zlib
 from unittest import mock
 
 HERE = Path(__file__).parent
-ROOT = Path(os.environ.get('EPOCH_SUPERVISOR_SOURCE_ROOT', str(Path(__file__).resolve().parent)))
+ROOT = Path(os.environ.get('EPOCH_SUPERVISOR_SOURCE_ROOT', str(HERE)))
 CLIENT = Path(os.environ.get('EPOCH_SUPERVISOR_CLIENT', str(ROOT / 'rm-0032-standing-epoch-client.py')))
 spec = importlib.util.spec_from_file_location('epoch_supervisor', ROOT / 'rm-0032-standing-epoch-supervisor.py')
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -99,7 +100,7 @@ class SourceTests(unittest.TestCase):
         raw = m.encoded({**SOURCES, '_client':CLIENT_SOURCE, '_wire':WIRE})
         self.assertGreater(len(raw),262144)
         self.assertLessEqual(len(raw),393216)
-        self.assertLess(len(value['client']['source'].encode()),120000)
+        self.assertLessEqual(len(value['client']['source'].encode()),m.SOURCE_CAP)
         outer = m.encoded({'bridge':(ROOT/'rm-0032-standing-epoch-supervisor.py').read_bytes().decode(),
                           'supervisor':SOURCE,'bundle':value,'config':CONFIG})
         self.assertLessEqual(len(outer),262144)
@@ -166,9 +167,24 @@ class SourceTests(unittest.TestCase):
         relay=m.load(m.specialize_relay(RELAY),'relay_fixture')
         self.assertEqual((relay.MAX_LIFETIME,relay.MAX_TUNNEL_SECONDS,relay.IDLE_SECONDS),(1055,1055,300))
         self.assertEqual(relay.MAX_TUNNEL_BYTES,1024**3)
-        self.assertEqual((relay.MAX_ACCEPTED,relay.MAX_CONCURRENT),(64,8))
+        self.assertEqual((relay.MAX_ACCEPTED,relay.MAX_CONCURRENT),(848,8))
         self.assertEqual(relay.AUTHORITIES,{'chatgpt.com:443':'chatgpt.com','auth.openai.com:443':'auth.openai.com'})
         self.assertIn('await asyncio.gather(*tasks, return_exceptions=True)\n            await self.server.wait_closed()',m.specialize_relay(RELAY))
+
+    def test_parallel_task_limit_only_changes_client_task_population(self):
+        baseline=m.prepare_runtime(SOURCE,CONFIG)
+        original_client=baseline.unit_argv(baseline.CLIENT,'source')
+        original_relay=baseline.unit_argv(baseline.RELAY,'source')
+        self.assertIn('--property=TasksMax=64',original_client)
+        self.assertIn('--property=TasksMax=64',original_relay)
+        for workers in range(1,9):
+            runtime=m.prepare_runtime(SOURCE,CONFIG)
+            m.configure_parallel_task_limit(runtime,workers)
+            self.assertEqual(runtime.unit_argv(runtime.CLIENT,'source'),
+                ['--property=TasksMax=%d'%(64*workers) if v=='--property=TasksMax=64' else v for v in original_client])
+            self.assertEqual(runtime.unit_argv(runtime.RELAY,'source'),original_relay)
+        for workers in (0,9,-1,True,4.0,'4',None):
+            with self.assertRaises(m.Refused):m.configure_parallel_task_limit(m.prepare_runtime(SOURCE,CONFIG),workers)
 
     def test_budget_does_not_renew_cleanup_or_exceed_original1055(self):
         now=[100.];budget=m.Budget(lambda:now[0])
@@ -272,6 +288,109 @@ class SourceTests(unittest.TestCase):
         with self.assertRaises(m.Refused):gate.accept(named,1)
 
 
+class ScopedOutputGateTests(unittest.TestCase):
+    def ready(self, version=2):
+        scopes=[{'purpose':'conversation','tools':list(client.TOOL_NAMES)},
+            {'purpose':'history-analysis','tools':['neurobro_analysis_material','neurobro_analysis_notes','neurobro_analysis_commit']}]
+        if version == 2: scopes.append({'purpose':'community-assessment','tools':[]})
+        return {'kind':'ready','protocol':'standing-scoped-epoch-v'+str(version),'scopes':scopes}
+
+    def gate(self, version=2):
+        # Receipt normalization is endpoint-owned; isolate outer mode/schema closure.
+        gate=m.OutputGate(lambda value:value,m.Budget())
+        gate.accept(custody_frame(),1)
+        gate.accept(self.ready(version),1)
+        return gate
+
+    def scope(self, purpose):
+        return {'purpose':purpose,'requestRef':'req-1','threadId':'thread-1','turnId':'turn-1',
+            'turnNumber':1,'threadTurnNumber':1}
+
+    def test_v1_v2_ready_exact_registry_order_and_opt_in(self):
+        for version in (1,2):
+            gate=self.gate(version)
+            self.assertEqual(gate.mode,'scoped-v2' if version == 2 else 'scoped')
+            with self.assertRaises(m.Refused):gate.accept(self.ready(version),1)
+        invalid=[]
+        for version in (1,2):
+            good=self.ready(version)
+            invalid.extend([{**good,'protocol':'standing-scoped-epoch-v3'},
+                {**good,'protocol':'standing-scoped-epoch-v'+str(3-version)},
+                {**good,'scopes':good['scopes'][::-1]},
+                {**good,'scopes':good['scopes']+[good['scopes'][0]]}])
+        for tools in (None,(),{},False,['neurobro_read_history'],['neurobro_analysis_material']):
+            good=self.ready()
+            good['scopes'][2]['tools']=tools
+            invalid.append(good)
+        for purpose in ('history-analysis','conversation','community-assessment ',None):
+            good=self.ready();good['scopes'][2]['purpose']=purpose;invalid.append(good)
+        for value in invalid:
+            with self.subTest(value=value):
+                gate=m.OutputGate(lambda value:value,m.Budget());gate.accept(custody_frame(),1)
+                with self.assertRaises(m.Refused):gate.accept(value,1)
+                self.assertFalse(gate.ready)
+
+    def test_v2_nonconversation_text_release_and_conversation_images(self):
+        for version in (1,2):
+            purposes=('conversation','history-analysis')+ (('community-assessment',) if version == 2 else ())
+            for purpose in purposes:
+                with self.subTest(version=version,purpose=purpose):
+                    gate=self.gate(version);scope=self.scope(purpose)
+                    gate.accept({'kind':'scope','scope':scope},1)
+                    if purpose == 'conversation':
+                        for kind in ('imageBegin','imageChunk','imageEnd'):gate.accept({'kind':kind},1)
+                    if purpose != 'community-assessment':
+                        gate.accept({'kind':'tool','purpose':purpose,'requestRef':'req-1','callRef':'call-1',
+                            'name':'neurobro_read_history','arguments':{}},1)
+                    gate.accept({'kind':'completed','scope':scope,'answer':'bounded result','kindOfAnswer':'text',
+                        'toolCalls':0,'toolRefusals':0},1)
+                    gate.accept({'kind':'released','purpose':purpose,'requestRef':'req-1',
+                        'delivery':'sent' if purpose == 'conversation' else 'not-sent'},1)
+                    self.assertIsNone(gate.active_scope)
+
+    def test_v2_community_tools_images_and_nonconversation_writes_refused(self):
+        for purpose in ('history-analysis','community-assessment'):
+            invalid=[{'kind':kind} for kind in ('imageBegin','imageChunk','imageEnd')]
+            invalid += [{'kind':'completed','scope':self.scope(purpose),'answer':'image','kindOfAnswer':'image',
+                'toolCalls':0,'toolRefusals':0}]
+            invalid += [{'kind':'released','purpose':purpose,'requestRef':'req-1','delivery':delivery}
+                for delivery in ('sent','unknown',None)]
+            if purpose == 'community-assessment':
+                invalid += [{'kind':'tool','purpose':purpose,'requestRef':'req-1','callRef':'call-1',
+                    'name':name,'arguments':{}} for name in ('neurobro_read_history','neurobro_analysis_material','neurobro_unknown')]
+            for value in invalid:
+                with self.subTest(value=value):
+                    gate=self.gate();gate.accept({'kind':'scope','scope':self.scope(purpose)},1)
+                    with self.assertRaises(m.Refused):gate.accept(value,1)
+        gate=self.gate();gate.accept({'kind':'scope','scope':self.scope('community-assessment')},1)
+        with self.assertRaises(m.Refused):gate.accept({'kind':'scope','scope':self.scope('conversation')},1)
+        for version in (1,2):
+            for purpose in ('community-assessment','unknown') if version == 1 else ('unknown',):
+                with self.assertRaises(m.Refused):self.gate(version).accept({'kind':'scope','scope':self.scope(purpose)},1)
+
+    def test_scoped_not_admitted_is_version_bound(self):
+        good={'kind':'notAdmitted','purpose':'community-assessment','requestRef':'req-1','reason':'turns',
+            'turnsAdmitted':16,'turnStartDispatches':16}
+        self.gate().accept(good,1)
+        with self.assertRaises(m.Refused):self.gate(1).accept(good,1)
+        for change in ({'purpose':'unknown'},{'turnStartDispatches':True},{'turnStartDispatches':17},{'extra':False}):
+            with self.assertRaises(m.Refused):self.gate().accept({**good,**change},1)
+
+    def test_scoped_closed_and_receipt_reject_cross_version_schemas(self):
+        for version in (1,2):
+            value=receipt();value['schema']='decadans.rm0032.standing-scoped-epoch.v'+str(version)
+            value['session']['facts']['schema']='neurobro-native-scoped-epoch-v'+str(version)
+            closed={'kind':'closed','code':value['session']['code'],'facts':value['session']['facts']}
+            gate=self.gate(version);gate.accept(closed,1);gate.accept({'kind':'epochResult','receipt':value},1)
+            self.assertEqual(gate.receipt,value)
+            for schema in ('neurobro-native-image-epoch-v1','neurobro-native-scoped-epoch-v'+str(3-version)):
+                with self.assertRaises(m.Refused):
+                    self.gate(version).accept({**closed,'facts':{**closed['facts'],'schema':schema}},1)
+            for schema in ('decadans.rm0032.standing-epoch.v1','decadans.rm0032.standing-scoped-epoch.v'+str(3-version)):
+                gate=self.gate(version);gate.accept(closed,1)
+                with self.assertRaises(m.Refused):gate.accept({'kind':'epochResult','receipt':{**value,'schema':schema}},1)
+
+
 class SessionOutputTests(unittest.IsolatedAsyncioTestCase):
     async def test_production_session_named_ready_stream_preserves_bytes_and_cleanup_receipt(self):
         session=m.load(SOURCES['session'],'actual_session_output_fixture')
@@ -331,6 +450,7 @@ class SessionOutputTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RelayTests(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(sys.platform == 'linux', 'Actual relay loopback runs in the Linux guest')
     async def test_two_actual_loopback_tunnels_share_one_budget_and_natural_shutdown_joins_handlers(self):
         relay_module=m.load(m.specialize_relay(RELAY),'relay_tcp_fixture')
         relay_module.MAX_TUNNEL_BYTES=4096  # synthetic scaled aggregate; production fixed1GiB
@@ -578,11 +698,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(writes[1],b'{"kind":"close"}\n')
 
     async def test_supervisor_large_input_allowance_cannot_expand_ordinary_or_output_caps(self):
-        image={'mimeType':'image/jpeg','base64':'A'*900000}
+        image={'mimeType':'image/jpeg','base64':'A'*(m.FRAME_CAP+1)}
         good={'kind':'turn','purpose':'conversation','requestRef':'photo','input':'Describe','images':[image]}
         cases=[{**good,'purpose':'history-analysis'}, {**good,'kind':'toolResult'},
                {**good,'extra':True},{**good,'input':'x'*24577},
-               {**good,'images':[image]*3},{**good,'images':[{'mimeType':'text/plain','base64':'A'*900000}]},
+               {**good,'images':[image]*3},{**good,'images':[{'mimeType':'text/plain','base64':'A'*(m.FRAME_CAP+1)}]},
                {**good,'images':[{**image,'base64':'A'*(m.VISUAL_INPUT_FRAME_CAP+1)}]}]
         for frame in cases:
             gate=m.OutputGate(client.normalize_result,m.Budget());gate.ready=True;writes=[]

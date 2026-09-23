@@ -43,11 +43,11 @@ class Rpc(f.Rpc):
         return result
 
 class Host:
-    def __init__(self, purposes=('conversation','history-analysis','conversation'), plan=None, clock=time.monotonic):
-        self.purposes=purposes; self.frames=[]; self.inbox=queue.Queue(); self.receivers=set(); self.actors={}
+    def __init__(self, purposes=('conversation','history-analysis','conversation'), plan=None, clock=time.monotonic, protocol='standing-scoped-epoch-v1'):
+        self.protocol=protocol; self.names={**NAMES, **({'community-assessment':()} if protocol=='standing-scoped-epoch-v2' else {})}; self.purposes=purposes; self.frames=[]; self.inbox=queue.Queue(); self.receivers=set(); self.actors={}
         self.rpc=Rpc(plan); self.clock=clock; self.hook=None; self.cancelled=0
-        self.idle=i.ScopedEpochIdleRegistry(idle_sentinel=IDLE,clock=clock)
-        self.budget=m.ScopedManagedDeadlineRpc(self.rpc,self.idle,clock); self.budget.begin_epoch()
+        self.idle=i.ScopedEpochIdleRegistry(idle_sentinel=IDLE,clock=clock,protocol=protocol)
+        self.budget=m.ScopedManagedDeadlineRpc(self.rpc,self.idle,clock,protocol=protocol); self.budget.begin_epoch()
     def turn(self, number): return {'kind':'turn','purpose':self.purposes[number-1],'requestRef':'request-'+str(number),'input':'Host-owned material'}
     def receive(self, seconds):
         self.receivers.add(threading.get_ident())
@@ -65,10 +65,11 @@ class Host:
         return True
     def factory(self, purpose, **ports):
         extra = {} if purpose=='conversation' else {'thread_config':{'web_search':'disabled','features.image_generation':False},'extra_tools':[f.extra(n) for n in s.ANALYSIS_NAMES]}
+        if purpose=='community-assessment': extra={'thread_config':{'web_search':'disabled','features.image_generation':False},'isolation_mode':'community-assessment'}
         actor=e.create_native_image_epoch(f.m,c,f.SOURCE,profile=f.PROFILE,cwd=f.CWD,tool_spec=copy.deepcopy(f.SPEC),instructions='Host scoped synthetic material.',**extra,**ports)
         self.actors[purpose]=actor; return actor
     def cancel(self): self.cancelled+=1
-    def run(self): return s.run_scoped_session(self.factory,self.receive,self.emit,self.idle,lambda p,t:True,self.cancel,budget=self.budget,clock=self.clock,tool_names=NAMES)
+    def run(self): return s.run_scoped_session(self.factory,self.receive,self.emit,self.idle,lambda p,t:True,self.cancel,budget=self.budget,clock=self.clock,tool_names=self.names,protocol=self.protocol)
 
 class ScopedSessionTests(unittest.TestCase):
     def test_actual_composer_supervisor_wire_scoped_validator_native_and_rpc_write(self):
@@ -260,5 +261,123 @@ class ScopedBudgetTests(unittest.TestCase):
             for n in range(2):registry.complete('conversation','thread-1','turn-'+str(n),());registry.route(event)
             registry.complete('conversation','thread-1','turn-3',())
             with self.assertRaises(i.IdleError):registry.route(event)
+
+
+class ScopedV2Tests(unittest.TestCase):
+    def host(self, purposes=('conversation','community-assessment','history-analysis','community-assessment')):
+        return Host(purposes=purposes,protocol='standing-scoped-epoch-v2')
+
+    def test_three_lazy_unique_threads_reuse_and_exact_v2_receipt(self):
+        host=self.host();result=host.run()
+        self.assertEqual(result['code'],'CLOSED',result)
+        self.assertEqual(host.frames[0],{'kind':'ready','protocol':'standing-scoped-epoch-v2','scopes':[
+            {'purpose':p,'tools':list(host.names[p])} for p in ('conversation','history-analysis','community-assessment')]})
+        scopes=[v['scope'] for v in host.frames if v['kind']=='completed']
+        self.assertEqual([v['threadId'] for v in scopes],['thread-1','thread-2','thread-3','thread-2'])
+        self.assertEqual([v['turnNumber'] for v in scopes],[1,2,3,4])
+        self.assertEqual([v['threadTurnNumber'] for v in scopes],[1,1,1,2])
+        facts=result['facts'];self.assertEqual(facts['schema'],'neurobro-native-scoped-epoch-v2')
+        self.assertEqual((facts['threadLimit'],facts['threadStartDispatches'],facts['turnStartDispatches']),(3,3,4))
+        self.assertEqual((facts['turnLimit'],facts['epochSeconds'],facts['turnSeconds']),(16,900,300))
+        self.assertEqual([v['purpose'] for v in facts['slots']],['conversation','history-analysis','community-assessment'])
+        self.assertEqual(len(host.receivers),1)
+        starts=[p for method,p in host.rpc.calls if method=='thread/start']
+        self.assertEqual(starts[1]['dynamicTools'],[])
+        self.assertEqual(starts[1]['config']['web_search'],'disabled')
+        self.assertIs(starts[1]['config']['features.image_generation'],False)
+        host=self.host(('community-assessment',));facts=host.run()['facts']
+        self.assertEqual(facts['threadStartDispatches'],1)
+        self.assertEqual([v['threadStarted'] for v in facts['slots']],[False,False,True])
+
+    def test_v1_rejects_third_purpose_and_v2_rejects_nonempty_community_tools(self):
+        host=Host(purposes=('community-assessment',));self.assertEqual(host.run()['code'],'PROTOCOL_REFUSED')
+        self.assertEqual(host.rpc.calls,[])
+        host=self.host();host.names['community-assessment']=('neurobro_other',)
+        with self.assertRaises(ValueError):host.run()
+        self.assertEqual(host.rpc.calls,[])
+
+    def test_global_sixteen_turns_cannot_be_reset_by_third_thread(self):
+        host=self.host(tuple(('conversation','community-assessment','history-analysis')[n%3] for n in range(17)))
+        result=host.run();self.assertEqual(result['code'],'TURN_LIMIT',result)
+        self.assertEqual(result['facts']['turnsAdmitted'],16)
+        self.assertEqual(result['facts']['turnStartDispatches'],16)
+        self.assertEqual(result['facts']['threadStartDispatches'],3)
+
+    def test_community_images_tools_builtins_and_deliveries_fail_closed(self):
+        host=self.host(('community-assessment',));original=host.turn
+        host.turn=lambda n:{**original(n),'images':[]}
+        self.assertEqual(host.run()['code'],'INPUT_REFUSED');self.assertEqual(host.rpc.calls,[])
+        for delivery in ('verified','unknown'):
+            host=self.host(('community-assessment',))
+            def hook(frame):
+                if frame['kind']=='completed':
+                    host.inbox.put({'kind':'release','purpose':'community-assessment','requestRef':frame['scope']['requestRef'],'delivery':delivery});return True
+                return False
+            host.hook=hook;result=host.run()
+            self.assertEqual(result['code'],'PROTOCOL_REFUSED',result)
+            self.assertTrue(result['facts']['unreleasedTurn'])
+        for plan in (lambda t:[f.request(t),f.completed(t)],
+                     lambda t:[f.web_event(t,f.web_item()),f.completed(t)],
+                     lambda t:[f.web_event(t,{'id':'image','type':'imageGeneration','status':'completed','result':'AAAA'}),f.completed(t)]):
+            host=self.host(('community-assessment',));host.rpc.plan=plan;result=host.run()
+            self.assertNotEqual(result['code'],'CLOSED',result)
+            self.assertFalse(any(v['kind'] in ('tool','completed','imageBegin','imageChunk','imageEnd') for v in host.frames))
+            self.assertEqual(host.rpc.responses,[])
+
+    def test_v2_third_slot_overlap_duplicate_thread_and_deadlines_fail_closed(self):
+        def setup():
+            now=[0.];rpc=Rpc();idle=i.ScopedEpochIdleRegistry(idle_sentinel=IDLE,protocol='standing-scoped-epoch-v2')
+            budget=m.ScopedManagedDeadlineRpc(rpc,idle,lambda:now[0],protocol='standing-scoped-epoch-v2');budget.begin_epoch()
+            return now,rpc,idle,budget
+        for overlap in ('conversation','history-analysis','community-assessment'):
+            now,rpc,idle,budget=setup();budget.begin_turn('community-assessment','one')
+            with self.assertRaises(m.ManagedDeadlineError):budget.begin_turn(overlap,'two')
+            self.assertEqual(rpc.calls,[])
+        now,rpc,idle,budget=setup();budget.begin_turn('community-assessment','one');slot=budget.slot('community-assessment')
+        slot.exchange('thread/start',{},10);slot.exchange('turn/start',{'threadId':'thread-1'},10)
+        budget.complete_turn('community-assessment','one',{'requestRef':'one','threadId':'thread-1','turnId':'turn-1','turnNumber':1})
+        budget.release_turn('community-assessment','one','not-sent');budget.begin_turn('conversation','two');rpc.threads=0
+        with self.assertRaises(m.ManagedDeadlineError):budget.slot('conversation').exchange('thread/start',{},10)
+        self.assertEqual(budget.counters()['threadStartDispatches'],2);self.assertTrue(budget.scoped_counters()['retired'])
+        now,rpc,idle,budget=setup();budget.begin_turn('community-assessment','one');now[0]=30
+        with self.assertRaises(m.ManagedDeadlineError):budget.slot('community-assessment').exchange('thread/start',{},10)
+        self.assertEqual(rpc.calls,[])
+        now,rpc,idle,budget=setup();now[0]=871
+        value=budget.begin_turn('community-assessment','one')
+        self.assertEqual((value['reason'],value['turnsAdmitted']),('time',0));self.assertEqual(rpc.calls,[])
+
+    def test_community_thirty_second_bound_retires_epoch_and_preserves_other_caps(self):
+        for purpose,duration in (('community-assessment',30),('conversation',300),('history-analysis',300)):
+            for elapsed in (duration-.001,duration):
+                now=[0.];host=Host(purposes=(purpose,),protocol='standing-scoped-epoch-v2',clock=lambda:now[0])
+                original=host.rpc.next_frame
+                def frame(seconds):
+                    self.assertLessEqual(seconds,duration);now[0]=elapsed;return original(seconds)
+                host.rpc.next_frame=frame;result=host.run()
+                self.assertEqual(result['facts']['turnSeconds'],300)
+                if elapsed<duration:self.assertEqual(result['code'],'CLOSED',result)
+                else:
+                    self.assertEqual(result['code'],'NATIVE_UNKNOWN',result)
+                    self.assertTrue(result['facts']['poisoned']);self.assertTrue(result['facts']['closed'])
+                    self.assertTrue(host.budget.scoped_counters()['retired']);self.assertGreater(host.cancelled,0)
+                    self.assertFalse(any(v['kind']=='completed' for v in host.frames))
+                    before=len(host.rpc.calls)
+                    with self.assertRaises(m.ManagedDeadlineError):host.budget.begin_turn('conversation','after-timeout')
+                    self.assertEqual(len(host.rpc.calls),before)
+        for purpose,late,expected in (('community-assessment',870,True),('community-assessment',870.001,False),('conversation',601,False),('history-analysis',601,False)):
+            now=[0.];host=Host(purposes=(purpose,),protocol='standing-scoped-epoch-v2',clock=lambda:now[0])
+            def hook(value):
+                if value['kind']=='ready':now[0]=late
+                return False
+            host.hook=hook;result=host.run()
+            self.assertEqual(result['code'],'CLOSED' if expected else 'EPOCH_LIMIT',result)
+            self.assertEqual(result['facts']['turnStartDispatches'],int(expected))
+
+    def test_protocol_mismatch_and_hostile_selection_refused_before_native(self):
+        host=self.host();host.budget.protocol='standing-scoped-epoch-v1'
+        with self.assertRaises(ValueError):host.run()
+        for value in (None,True,2,[],{},'standing-scoped-epoch-v3'):
+            with self.assertRaises(i.IdleError):i.ScopedEpochIdleRegistry(idle_sentinel=IDLE,protocol=value)
+            with self.assertRaises(m.ManagedDeadlineError):m.ScopedManagedDeadlineRpc(Rpc(),host.idle,protocol=value)
 
 if __name__=='__main__': unittest.main()

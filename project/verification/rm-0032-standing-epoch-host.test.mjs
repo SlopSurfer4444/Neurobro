@@ -12,7 +12,7 @@ const sources=Object.fromEntries(Object.entries(SOURCE_NAMES).map(([key,name])=>
 const pins=Object.fromEntries(Object.entries(sources).map(([key,source])=>[key,sha(source)]));
 const token='0123456789abcdef0123456789abcdef';
 const packet=preparePacket({sources,pins,token});
-const python=process.env.DECADANS_TEST_PYTHON??'python';
+const python=process.env.NEUROBRO_TEST_PYTHON??'python';
 function run(script,input){
   const value=spawnSync(python,['-I','-S','-B','-c',script],{input:JSON.stringify(input),encoding:'utf8',timeout:10000,maxBuffer:16384,windowsHide:true});
   assert.equal(value.error,undefined);assert.equal(value.status,0,value.stderr);
@@ -25,17 +25,20 @@ test('exact pinned source set composes one capped immutable packet and fixed ide
   assert.equal(assertPrepared(packet),packet);
   assert.ok(Object.isFrozen(packet)&&Object.isFrozen(packet.config)&&Object.isFrozen(packet.pins));
   assert.ok(packet.clientDecodedBytes<=393216&&packet.outerDecodedBytes<=393216);
-  assert.ok(Buffer.byteLength(packet.clientSource)<120000&&Buffer.byteLength(packet.source)<=262144);
+  assert.ok(Buffer.byteLength(packet.clientSource)<=262144&&Buffer.byteLength(packet.source)<=262144);
   assert.equal(packet.sourceSha256,sha(packet.source));assert.equal(packet.clientSourceSha256,sha(packet.clientSource));
   assert.throws(()=>assertPrepared({...packet}));
 });
 
 test('scoped mode is explicit in the pinned client capsule and cannot alter fixed process identities or bounds',()=>{
   const scoped=preparePacket({sources,pins,token,sessionMode:'standing-scoped-epoch-v1'});
+  const assessed=preparePacket({sources,pins,token,sessionMode:'standing-scoped-epoch-v2'});
   assert.equal(scoped.sessionMode,'standing-scoped-epoch-v1');assert.equal(Object.hasOwn(packet,'sessionMode'),false);
   assert.deepEqual(scoped.config,packet.config);assert.deepEqual(scoped.pins,packet.pins);assert.notEqual(scoped.sourceSha256,packet.sourceSha256);
   assert.ok(scoped.clientDecodedBytes<=393216&&scoped.outerDecodedBytes<=393216);
-  assert.ok(Buffer.byteLength(scoped.clientSource)<120000&&Buffer.byteLength(scoped.source)<=262144);
+  assert.ok(Buffer.byteLength(scoped.clientSource)<=262144&&Buffer.byteLength(scoped.source)<=262144);
+  assert.deepEqual(assessed.config,packet.config);assert.equal(assessed.sessionMode,'standing-scoped-epoch-v2');
+  assert.ok(Buffer.byteLength(assessed.clientSource)<=262144&&Buffer.byteLength(assessed.source)<=262144);
   const parsed=run(String.raw`
 import ast,json,sys
 value=json.loads(sys.stdin.read())
@@ -44,12 +47,40 @@ def mode(source):
  calls=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Subscript) and isinstance(n.func.value,ast.Name) and n.func.value.id=='_client' and isinstance(n.func.slice,ast.Constant) and n.func.slice.value=='main']
  assert len(calls)==1 and len(calls[0].args)==4
  return {k.arg:ast.literal_eval(k.value) for k in calls[0].keywords}
-print(json.dumps({'legacy':mode(value['legacy']),'scoped':mode(value['scoped'])}))
-`,{legacy:packet.clientSource,scoped:scoped.clientSource});
-  assert.deepEqual(parsed,{legacy:{},scoped:{session_mode:'standing-scoped-epoch-v1'}});
-  for(const sessionMode of [undefined,null,false,'legacy','standing-scoped-epoch-v2'])assert.throws(()=>preparePacket({sources,pins,token,sessionMode}));
+print(json.dumps({'legacy':mode(value['legacy']),'scoped':mode(value['scoped']),'assessed':mode(value['assessed'])}))
+`,{legacy:packet.clientSource,scoped:scoped.clientSource,assessed:assessed.clientSource});
+  assert.deepEqual(parsed,{legacy:{},scoped:{session_mode:'standing-scoped-epoch-v1'},assessed:{session_mode:'standing-scoped-epoch-v2'}});
+  for(const sessionMode of [undefined,null,false,'legacy','standing-scoped-epoch-v3'])assert.throws(()=>preparePacket({sources,pins,token,sessionMode}));
   let getters=0;const hostile={sources,pins,token};Object.defineProperty(hostile,'sessionMode',{get(){getters++;throw Error();},enumerable:true});
   assert.throws(()=>preparePacket(hostile));assert.equal(getters,0);
+});
+
+test('work profile is a fixed host option with compatible legacy and scoped capsules',()=>{
+  for(const workProfile of ['team-assistant','community-team']){
+  const team=preparePacket({sources,pins,token,workProfile});
+  const scoped=preparePacket({sources,pins,token,workProfile,sessionMode:'standing-scoped-epoch-v1'});
+  assert.equal(Object.hasOwn(packet,'workProfile'),false);assert.equal(team.workProfile,workProfile);
+  assert.deepEqual(team.config,packet.config);assert.deepEqual(team.pins,packet.pins);
+  for(const candidate of [team,scoped]){
+    assert.ok(candidate.clientDecodedBytes<=393216&&candidate.outerDecodedBytes<=393216);
+    assert.ok(Buffer.byteLength(candidate.clientSource)<=262144&&Buffer.byteLength(candidate.source)<=262144);
+    assert.equal(assertPrepared(candidate),candidate);
+  }
+  const actual=run(String.raw`
+import ast,json,sys
+value=json.loads(sys.stdin.read())
+def arguments(source):
+ tree=ast.parse(source)
+ calls=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Subscript) and isinstance(n.func.value,ast.Name) and n.func.value.id=='_client' and isinstance(n.func.slice,ast.Constant) and n.func.slice.value=='main']
+ assert len(calls)==1
+ return {k.arg:ast.literal_eval(k.value) for k in calls[0].keywords}
+print(json.dumps({k:arguments(v) for k,v in value.items()}))
+`,{legacy:packet.clientSource,team:team.clientSource,scoped:scoped.clientSource});
+  assert.deepEqual(actual,{legacy:{},team:{work_profile:workProfile},scoped:{session_mode:'standing-scoped-epoch-v1',work_profile:workProfile}});
+  }
+  for(const workProfile of [undefined,null,false,{},'decadans','arbitrary prompt'])assert.throws(()=>preparePacket({sources,pins,token,workProfile}));
+  let reads=0;const hostile={sources,pins,token};Object.defineProperty(hostile,'workProfile',{enumerable:true,get(){reads++;throw Error();}});
+  assert.throws(()=>preparePacket(hostile));assert.equal(reads,0);
 });
 
 test('changed source and changed matching pin cannot enter a prepared packet',()=>{

@@ -15,12 +15,13 @@ import { projectStandingSharedContext, STANDING_SHARED_CONTEXT_MAX_BYTES, type S
 import { conversationModelInput, CONVERSATION_INPUT_BYTES } from "../src/standing-model-input.js";
 import type { StandingContext, StandingContextMessage } from "../src/standing-context.js";
 
-async function fixture(t: TestContext, summary = "Model summary of synthetic source", claimText = "Model-authored decision", claimCount = 1) {
+async function fixture(t: TestContext, summary = "Model summary of synthetic source", claimText = "Model-authored decision", claimCount = 1, community = false) {
   const root = await mkdtemp(join(resolve(tmpdir()), "neurobro-chronicle-note-"));
   t.after(async () => { assert.ok(root.startsWith(join(resolve(tmpdir()), "neurobro-chronicle-note-"))); await rm(root, { recursive: true, force: true }); });
   const pages = join(root, "pages"), directory = join(root, "analysis"); await mkdir(pages); await mkdir(directory);
   const intent: StandingHistoryTaskIntent = { schema: "standing-history-task-v1", taskId: "htask_" + "7".repeat(48), accountId: "123", chatId: "-100456", requesterId: "456", primaryMessageId: 789,
-    fromDate: 100, toDate: 200, timezone: "Europe/Moscow", objective: "Private objective must not be projected" };
+    fromDate: 100, toDate: 200, timezone: "Europe/Moscow", objective: "Private objective must not be projected",
+    ...(community ? {source:{kind:"observed-source" as const,sourceRef:"community" as const,workspaceId:"test-team",peerId:"-100987654321"}} : {}) };
   const passphrase = "synthetic-chronicle-note-passphrase", binding = { intent, passphrase };
   const source = await openStandingHistoryTaskStore({ ...binding, directory: pages, mode: "create" });
   const before = (await source.status()).readProgress.checkpoint;
@@ -56,6 +57,15 @@ async function fixture(t: TestContext, summary = "Model summary of synthetic sou
 function frozen(value: unknown): void {
   if (value && typeof value === "object") { assert.ok(Object.isFrozen(value)); for (const child of Object.values(value)) frozen(child); }
 }
+
+test("community chronicle retains source label with internal ownership and private routing",async t=>{
+  const f=await fixture(t,undefined,undefined,1,true);
+  const note=projectStandingChronicleNote({intent:f.intent,readiness:f.readiness,node:f.node,referenceKey:f.referenceKey});
+  assert.equal(note.historySource,"community");
+  requireStandingChronicleNote(note,f.owner);
+  assert.throws(()=>requireStandingChronicleNote(note,{...f.owner,peerId:f.intent.source!.peerId}));
+  assert.ok(!JSON.stringify(note).includes(f.intent.source!.peerId));
+});
 
 test("actual reopened analysis produces bounded unverified notes with exact support and omission provenance", async t => {
   const f = await fixture(t), note = projectStandingChronicleNote({ intent: f.intent, readiness: f.readiness, node: f.node, referenceKey: f.referenceKey });

@@ -8,8 +8,13 @@ import { setImmediate as immediate } from "node:timers/promises";
 import { encryptSession, decryptSession } from "../src/session-crypto.js";
 import { openStandingHistoryTaskStore, type StandingHistoryTaskIntent } from "../src/standing-history-task-store.js";
 import { projectStandingHistorySource, type StandingHistorySourceFragment } from "../src/standing-history-source-projection.js";
-import { openStandingHistoryAnalysisStore } from "../src/standing-history-analysis-store.js";
+import { openStandingHistoryAnalysisStore, snapshotStandingHistoryAnalysisOutput, validateStandingHistoryShownOutput } from "../src/standing-history-analysis-store.js";
+import { MATERIAL_BYTES, MAX_FRAGMENTS, MAX_SUPPORTS, SUMMARY_BYTES, MAX_CLAIMS } from "../src/standing-history-analysis-limits.js";
 import type { SelfHistoryTaskCheckpoint, SelfHistoryTaskPage } from "../src/self-history-reader.js";
+import { openStandingHistoryAnalysisAttemptStore } from "../src/standing-history-analysis-attempt-store.js";
+import { openStandingHistoryParallelWorkStore } from "../src/standing-history-parallel-work-store.js";
+import { prepareStandingHistoryAnalysisMaterial } from "../src/standing-history-analysis-runtime.js";
+import { projectMergeView } from "../src/standing-history-analysis-view.js";
 
 const intent = (): StandingHistoryTaskIntent => ({ schema: "standing-history-task-v1", taskId: "htask_" + "1".repeat(48), accountId: "123", chatId: "-100456",
   requesterId: "456", primaryMessageId: 789, fromDate: 100, toDate: 200, timezone: "Europe/Moscow", objective: "Синтетическое обсуждение секретного проекта" });
@@ -36,11 +41,11 @@ function page(before: SelfHistoryTaskCheckpoint, count = 1): SelfHistoryTaskPage
     excluded: { nonText: 0, invalidText: 0, unavailable: 0, outsidePeriod: 0 },
     limitations: ["text-only", "not-a-full-archive", "deleted-or-hidden-content-not-recoverable", "edits-may-change-between-pages"] } };
 }
-async function fixture(t: TestContext, counts = [1, 1], transform: (value: SelfHistoryTaskPage) => SelfHistoryTaskPage = value => value) {
+async function fixture(t: TestContext, counts = [1, 1], transform: (value: SelfHistoryTaskPage) => SelfHistoryTaskPage = value => value, taskIntent = intent()) {
   const root = await mkdtemp(join(resolve(tmpdir()), "neurobro-analysis-store-"));
   t.after(async () => { assert.ok(root.startsWith(join(resolve(tmpdir()), "neurobro-analysis-store-"))); await rm(root, { recursive: true, force: true }); });
   const directory = join(root, "analysis"), sourceDirectory = join(root, "sources"); await mkdir(directory); await mkdir(sourceDirectory);
-  const binding = { passphrase: "synthetic-analysis-store-passphrase", intent: intent() };
+  const binding = { passphrase: "synthetic-analysis-store-passphrase", intent: taskIntent };
   const source = await openStandingHistoryTaskStore({ ...binding, directory: sourceDirectory, mode: "create" });
   t.after(() => source.close());
   for (const count of counts) { const before = (await source.status()).readProgress.checkpoint; await source.appendPage({ expectedCheckpoint: before, result: transform(page(before, count)) }); }
@@ -65,6 +70,85 @@ async function leaf(f: Awaited<ReturnType<typeof fixture>>, store: Store, pageIn
   const fragment = await projected(f, store, pageIndex);
   return store.appendLeaf({ expectedHead: (await store.status()).headHash, inputs: [input(fragment)], output: output(fragment) });
 }
+
+test("200 persisted children merge and cold reopen through ledger, attempt and parallel work contracts", async t => {
+  const f = await fixture(t, [100, 100], value => value, { ...intent(), fromDate: 1, toDate: 10000 }), store = await created(f, t);
+  const children: Awaited<ReturnType<Store["appendLeaf"]>>[] = []; let head = (await store.status()).headHash;
+  for (const pageIndex of [1, 2]) {
+    const storedPage = (await f.source.readPage(pageIndex))!; let position: string | undefined;
+    do {
+      const fragment = projectStandingHistorySource({ intent: f.args.intent, referenceKey: store.referenceKey(), storedPage, maxBytes: MATERIAL_BYTES, maxRows: 1,
+        ...(position ? { position } : {}) });
+      const node = await store.appendLeaf({ expectedHead: head, inputs: [{ ...input(fragment, MATERIAL_BYTES, position), maxRows: 1 }], output: output(fragment) });
+      children.push(node); head = node.hash; position = fragment.nextPosition ?? undefined;
+    } while (position);
+  }
+  const refs = children.map(node => node.nodeRef) as [string, string, ...string[]], mergedOutput = children[0]!.output;
+  assert.equal(refs.length, 200);
+  await assert.rejects(store.appendMerge({ expectedHead: head, children: [...refs, refs[0]], output: mergedOutput }), /OVERLAP/);
+  const merged = await store.appendMerge({ expectedHead: head, children: refs, output: mergedOutput });
+  const saved = await readFile(join(f.slot, "node-000201.enc")); await store.close();
+  const reopened = await openStandingHistoryAnalysisStore({ ...f.args, mode: "open" }); t.after(() => reopened.close());
+  assert.equal((await reopened.status()).storage, "ready"); assert.deepEqual(await reopened.readNode(merged.nodeRef), merged);
+  assert.equal(merged.coverage.length, 200); assert.deepEqual(await readFile(join(f.slot, "node-000201.enc")), saved);
+  const sourceHead = (await f.source.status()).readProgress.chainHash;
+  const view = projectMergeView({ children, referenceKey: reopened.referenceKey(), maxBytes: MATERIAL_BYTES, preferComplete: true });
+  assert.equal(view.children.length, 200); assert.ok(Buffer.byteLength(JSON.stringify(view)) < MATERIAL_BYTES);
+  const attemptDirectory = join(f.root, "wide-attempts"); await mkdir(attemptDirectory);
+  const attemptArgs = { directory: attemptDirectory, passphrase: f.args.passphrase, intent: f.args.intent, analysis: reopened };
+  const attempts = await openStandingHistoryAnalysisAttemptStore({ ...attemptArgs, mode: "create" }); t.after(() => attempts.close());
+  const modelInputHash = prepareStandingHistoryAnalysisMaterial({ kind: "merge", sourceHead, expectedHead: merged.hash, children: refs, materials: view.children }).modelInputHash;
+  const plan = { kind: "merge" as const, sourceHead, expectedHead: merged.hash, nodeIndex: 202, modelInputHash, children: refs, viewMaxBytes: MATERIAL_BYTES };
+  const reserved = await attempts.reserve({ plan }); await attempts.prepare({ attemptRef: reserved.attemptRef, output: mergedOutput }); await attempts.close();
+  const coldAttempts = await openStandingHistoryAnalysisAttemptStore({ ...attemptArgs, mode: "open" }); t.after(() => coldAttempts.close());
+  const second = await coldAttempts.commitPrepared({ attemptRef: reserved.attemptRef }); assert.equal(second.index, 202);
+  const workDirectory = join(f.root, "wide-work"); await mkdir(workDirectory);
+  const workArgs = { directory: workDirectory, passphrase: f.args.passphrase, intent: f.args.intent, analysis: reopened, source: f.source };
+  const work = await openStandingHistoryParallelWorkStore({ ...workArgs, mode: "create" }); t.after(() => work.close());
+  const nativeBinding = { epochId: "1".repeat(32), requestRef: "wide-merge-200", purpose: "history-analysis" as const };
+  const workPlan = { kind: "merge" as const, children: refs, viewMaxBytes: MATERIAL_BYTES, nativeBinding,
+    modelInputHash: prepareStandingHistoryAnalysisMaterial({ kind: "merge", sourceHead, expectedHead: second.hash, children: refs, materials: view.children }).modelInputHash };
+  const wave = await work.reserveWave({ sourceHead, expectedHead: second.hash, works: [workPlan] }); await work.close();
+  const coldWork = await openStandingHistoryParallelWorkStore({ ...workArgs, mode: "open" }); t.after(() => coldWork.close());
+  assert.deepEqual((await coldWork.readWork(wave.workRefs[0]!)).plan, workPlan);
+  assert.equal((await coldWork.status()).modelReplayAllowed, false);
+  await assert.rejects(coldWork.reserveWave({ sourceHead, expectedHead: second.hash, works: [workPlan] }), /CONSUMED/);
+});
+
+test("128 large-budget fragments and full output survive encrypted cold reopen", async t => {
+  const f = await fixture(t, [64, 64], value => value, { ...intent(), fromDate: 1, toDate: 10000 }), store = await created(f, t);
+  const inputs: LeafInput["inputs"][number][] = [], fragments: StandingHistorySourceFragment[] = [];
+  for (const pageIndex of [1, 2]) {
+    const storedPage = (await f.source.readPage(pageIndex))!; let position: string | undefined;
+    do {
+      const fragment = projectStandingHistorySource({ intent: f.args.intent, referenceKey: store.referenceKey(), storedPage, maxBytes: MATERIAL_BYTES, maxRows: 1,
+        ...(position ? { position } : {}) });
+      fragments.push(fragment); inputs.push({ ...input(fragment, MATERIAL_BYTES, position), maxRows: 1 }); position = fragment.nextPosition ?? undefined;
+    } while (position);
+  }
+  assert.equal(inputs.length, MAX_FRAGMENTS);
+  const support = output(fragments[0]!).claims[0]!.supports;
+  const full = { summary: "я".repeat(SUMMARY_BYTES / 2), claims: Array.from({ length: MAX_CLAIMS }, () => ({ kind: "reported" as const, text: "c".repeat(1024), supports: support })) };
+  const node = await store.appendLeaf({ expectedHead: (await store.status()).headHash, inputs, output: full });
+  assert.ok(Buffer.byteLength(JSON.stringify(node)) > 128 * 1024);
+  const saved = await readFile(join(f.slot, "node-000001.enc")); await store.close();
+  const reopened = await openStandingHistoryAnalysisStore({ ...f.args, mode: "open" }); t.after(() => reopened.close());
+  assert.equal((await reopened.status()).storage, "ready"); assert.deepEqual(await reopened.readNode(node.nodeRef), node);
+  assert.deepEqual(await readFile(join(f.slot, "node-000001.enc")), saved);
+  await assert.rejects(reopened.appendLeaf({ expectedHead: node.hash, inputs: [...inputs, inputs[0]!], output: full }), /INPUT/);
+  await assert.rejects(reopened.appendLeaf({ expectedHead: node.hash, inputs: [{ ...inputs[0]!, maxBytes: MATERIAL_BYTES + 1 }], output: full }), /INPUT/);
+});
+
+test("output and shown-support boundaries retain claim-text and per-claim support caps", () => {
+  const shown = Array.from({ length: MAX_SUPPORTS }, (_, i) => ({ sourceRef: "hsrc_" + i.toString(16).padStart(48, "0"), versionRef: "hver_" + "1".repeat(48) }));
+  const output = { summary: "x".repeat(SUMMARY_BYTES), claims: Array.from({ length: MAX_CLAIMS }, () => ({ kind: "reported" as const, text: "x".repeat(1024), supports: shown.slice(0, 16) })) };
+  assert.deepEqual(validateStandingHistoryShownOutput(output, shown), output);
+  assert.throws(() => validateStandingHistoryShownOutput(output, [...shown, shown[0]!]), /INPUT/);
+  assert.throws(() => snapshotStandingHistoryAnalysisOutput({ ...output, summary: output.summary + "x" }), /INPUT/);
+  assert.throws(() => snapshotStandingHistoryAnalysisOutput({ ...output, claims: [...output.claims, output.claims[0]!] }), /INPUT/);
+  assert.throws(() => snapshotStandingHistoryAnalysisOutput({ ...output, claims: [{ ...output.claims[0]!, text: "x".repeat(1025) }] }), /INPUT/);
+  assert.throws(() => snapshotStandingHistoryAnalysisOutput({ ...output, claims: [{ ...output.claims[0]!, supports: shown.slice(0, 17) }] }), /INPUT/);
+});
 
 test("encrypted independent ledger preserves key, exact leaf/merge nodes and source frontier across reopen", async t => {
   const f = await fixture(t), originalSource = await readFile(join(f.sourceSlot, "page-000001.enc")), before = await f.source.status(), store = await created(f, t);
@@ -202,7 +286,7 @@ test("excluded source rows preserve coverage but cannot support model factual cl
 
 test("output byte/count bounds and invalid claim shapes refuse before committing", async t => {
   const f = await fixture(t), store = await created(f, t), fragment = await projected(f, store), head = (await store.status()).headHash, valid = output(fragment), claim = valid.claims[0]!;
-  for (const bad of [{ ...valid, summary: "я".repeat(2049) }, { ...valid, claims: Array(17).fill(claim) },
+  for (const bad of [{ ...valid, summary: "я".repeat(SUMMARY_BYTES / 2 + 1) }, { ...valid, claims: Array(MAX_CLAIMS + 1).fill(claim) },
     { ...valid, claims: [{ ...claim, text: "я".repeat(513) }] }, { ...valid, claims: [{ ...claim, supports: [] }] },
     { ...valid, claims: [{ ...claim, supports: Array(17).fill(claim.supports[0]) }] }, { ...valid, omittedDetailCount: -1 },
     { ...valid, claims: [{ ...claim, kind: "verified" }] }])

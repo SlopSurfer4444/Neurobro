@@ -1,5 +1,6 @@
 import type { PilotBinding, PilotPrimary } from "./pilot-telegram-adapter.js";
 import type { ConversationReferences } from "./conversation-references.js";
+import { STANDING_INCOMING_TEXT_BYTES } from "./standing-context.js";
 import { requireStandingSharedContextSnapshot, type StandingSharedContextSnapshot } from "./standing-shared-context.js";
 
 /** Same-process host ownership, not authentication of the underlying sources.
@@ -30,7 +31,7 @@ export function bindStandingSharedContext(input: Readonly<{
     references: input.references, signal: input.signal });
   if (owner.primary.chatId !== input.binding.peerId ||
       !Number.isSafeInteger(owner.primary.messageId) || owner.primary.messageId < 1 || owner.primary.messageId > 2147483647 ||
-      typeof owner.primary.text !== "string" || Buffer.byteLength(owner.primary.text, "utf8") > 4096) refuse();
+      typeof owner.primary.text !== "string" || Buffer.byteLength(owner.primary.text, "utf8") > STANDING_INCOMING_TEXT_BYTES) refuse();
   check(owner, input.snapshot);
   const value = Object.freeze({ snapshot: input.snapshot });
   owners.set(value, owner);

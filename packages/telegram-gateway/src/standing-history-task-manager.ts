@@ -6,7 +6,8 @@ import { types } from "node:util";
 import { assertPilotPrivateDirectory } from "./pilot-outbox.js";
 import { decryptSession } from "./session-crypto.js";
 import { createStandingHistoryTaskRequest, assertStandingHistoryTaskRequestMatches } from "./standing-history-task-request.js";
-import { snapshotStandingHistoryTaskIntent, openStandingHistoryTaskStore, type StandingHistoryTaskIntent, type StandingHistoryTaskStatus, type StandingHistoryTaskStore } from "./standing-history-task-store.js";
+import { snapshotStandingHistoryTaskIntent, snapshotStandingHistoryTaskObservedSource, openStandingHistoryTaskStore,
+  type StandingHistoryTaskIntent, type StandingHistoryTaskObservedSource, type StandingHistoryTaskStatus, type StandingHistoryTaskStore } from "./standing-history-task-store.js";
 import { openStandingHistoryAnalysisStore, type StandingHistoryAnalysisStatus } from "./standing-history-analysis-store.js";
 import { openStandingHistoryTaskControlStore, type StandingHistoryTaskControlStatus, type StandingHistoryTaskControlStore } from "./standing-history-task-control-store.js";
 import { openStandingHistoryAnalysisAttemptStore, type StandingHistoryAnalysisAttemptStatus } from "./standing-history-analysis-attempt-store.js";
@@ -14,18 +15,19 @@ import { readStandingHistoryTaskDelivery } from "./standing-history-task-deliver
 import { readStandingHistoryTaskDisposition, type StandingHistoryTaskDispositionReason } from "./standing-history-task-disposition.js";
 
 type Primary = Readonly<{ chatId: string; ownerId: string; messageId: number; text?: string }>;
-type Request = Readonly<{ fromDate: number; toDate: number; timezone: string; objective: string }>;
+type Request = Readonly<{ fromDate: number; toDate: number; timezone: string; objective: string; source?: "internal" | "community" }>;
 type Gap = Readonly<{ storage: "absent" | "unavailable" }>;
 export type StandingHistoryManagedDeliveryStatus = Readonly<{
   state: "verified" | "unknown" | "failed-terminal" | "partial" | "not-attempted" | "unavailable";
   /** The task slot is reserved, not necessarily every part. nextPart is an
    * authenticated reader fact; final admission still rechecks its freshness. */
-  consumed: boolean; partsTotal?: 2; verifiedParts?: 0 | 1 | 2; nextPart?: 1 | 2;
+  consumed: boolean; partsTotal?: number; verifiedParts?: number; nextPart?: number;
 }>;
 export type StandingHistoryManagedDisposition = Readonly<{ storage: "absent" | "unavailable" }> |
   Readonly<{ storage: "ready"; reason: StandingHistoryTaskDispositionReason }>;
 export type StandingHistoryManagedTaskStatus = Readonly<{
   taskRef: string; control: StandingHistoryTaskControlStatus;
+  source?: "community";
   read: StandingHistoryTaskStatus | Gap; analysis: StandingHistoryAnalysisStatus | Gap;
   attempts?: StandingHistoryAnalysisAttemptStatus | Gap;
   delivery?: StandingHistoryManagedDeliveryStatus;
@@ -40,7 +42,7 @@ export type StandingHistoryTaskContextEvent = Readonly<{
   kind: "snapshot"; intent: StandingHistoryTaskIntent; status: StandingHistoryManagedTaskStatus;
 }>;
 export type StandingHistoryTaskCancellationResult = Readonly<{
-  taskRef: string; control: StandingHistoryTaskControlStatus; revocationJoined: true;
+  taskRef: string; control: StandingHistoryTaskControlStatus; source?: "community"; revocationJoined: true;
 }>;
 export type StandingHistoryTaskManager = Readonly<{
   create(input: Readonly<{ primary: Primary; request: Request; signal?: AbortSignal }>): Promise<StandingHistoryManagedTaskStatus>;
@@ -87,9 +89,10 @@ export async function openStandingHistoryTaskManager(input: Readonly<{
    * Snapshot payloads are detached and deeply frozen; they are observations of
    * successfully joined operations, not a promise of future freshness. */
   onObservation?(event: StandingHistoryTaskContextEvent): void;
+  observedSource?: StandingHistoryTaskObservedSource;
   signal?: AbortSignal;
 }>): Promise<StandingHistoryTaskManager> {
-  const args = data(input, ["directories", "passphrase", "binding", "onCancelled"], ["signal", "onObservation"]);
+  const args = data(input, ["directories", "passphrase", "binding", "onCancelled"], ["signal", "onObservation", "observedSource"]);
   const d = data(args.directories, ["control", "pages", "analysis"], ["attempts", "delivery", "disposition"]), b = data(args.binding, ["accountId", "peerId"]);
   const signal = signalCopy(args);
   if (typeof args.passphrase !== "string" || args.passphrase.length < 16 || !args.passphrase.trim() || args.passphrase.includes("\0") || Buffer.byteLength(args.passphrase) > 4096 || Buffer.from(args.passphrase).toString("utf8") !== args.passphrase ||
@@ -107,6 +110,10 @@ export async function openStandingHistoryTaskManager(input: Readonly<{
     if (!rel || !isAbsolute(rel) && rel !== ".." && !rel.startsWith(".." + sep)) return fail("input");
   }
   const binding = Object.freeze({ accountId: b.accountId, peerId: b.peerId });
+  let observedSource: StandingHistoryTaskObservedSource | undefined;
+  try { observedSource = Object.hasOwn(args, "observedSource") ? snapshotStandingHistoryTaskObservedSource(args.observedSource) : undefined; }
+  catch { return fail("input"); }
+  if (observedSource?.peerId === binding.peerId) return fail("input");
   const onCancelled = args.onCancelled as (input: Readonly<{ taskRef: string; revision: 1 }>) => Promise<void>;
   const onObservation = args.onObservation as ((event: StandingHistoryTaskContextEvent) => void) | undefined;
   const observe = (event: StandingHistoryTaskContextEvent): void => {
@@ -236,11 +243,11 @@ export async function openStandingHistoryTaskManager(input: Readonly<{
           const facts = saved as unknown as Record<string, unknown>;
           const multipart = Object.hasOwn(facts, "partsTotal") || Object.hasOwn(facts, "verifiedParts") || Object.hasOwn(facts, "nextPart");
           if (!multipart && state !== "partial") delivery = Object.freeze({ state, consumed: true });
-          else if (multipart && facts.partsTotal === 2 && Number.isInteger(facts.verifiedParts) && Number(facts.verifiedParts) >= 0 && Number(facts.verifiedParts) <= 2 &&
-              (state === "verified" ? facts.verifiedParts === 2 : Number(facts.verifiedParts) < 2) &&
+          else if (multipart && Number.isInteger(facts.partsTotal) && Number(facts.partsTotal) >= 2 && Number(facts.partsTotal) <= 16 && Number.isInteger(facts.verifiedParts) && Number(facts.verifiedParts) >= 0 && Number(facts.verifiedParts) <= Number(facts.partsTotal) &&
+              (state === "verified" ? facts.verifiedParts === facts.partsTotal : Number(facts.verifiedParts) < Number(facts.partsTotal)) &&
               (state === "partial" ? Object.hasOwn(facts, "nextPart") && facts.nextPart === Number(facts.verifiedParts) + 1 : !Object.hasOwn(facts, "nextPart"))) {
-            delivery = Object.freeze({ state, consumed: true, partsTotal: 2, verifiedParts: facts.verifiedParts as 0 | 1 | 2,
-              ...(state === "partial" ? { nextPart: facts.nextPart as 1 | 2 } : {}) });
+            delivery = Object.freeze({ state, consumed: true, partsTotal: facts.partsTotal as number, verifiedParts: facts.verifiedParts as number,
+              ...(state === "partial" ? { nextPart: facts.nextPart as number } : {}) });
           }
         }
         // Neither a verified message nor model/node counts prove lease/owner
@@ -298,7 +305,15 @@ export async function openStandingHistoryTaskManager(input: Readonly<{
     async create(value) {
       const v = data(value, ["primary", "request"], ["signal"]), callSignal = signalCopy(v); live();
       let requested: StandingHistoryTaskIntent;
-      try { requested = createStandingHistoryTaskRequest({ identityKey: key!.toString("hex"), binding, primary: v.primary as Primary, request: v.request as Request }); } catch { return fail("input"); }
+      try {
+        const request = data(v.request, ["fromDate", "toDate", "timezone", "objective"], ["source"]);
+        if (Object.hasOwn(request, "source") && request.source !== "internal" && request.source !== "community") return fail("input");
+        const source = request.source === "community" ? observedSource : undefined;
+        if (request.source === "community" && source === undefined) return fail("input");
+        requested = createStandingHistoryTaskRequest({ identityKey: key!.toString("hex"), binding, primary: v.primary as Primary,
+          request: { fromDate: request.fromDate as number, toDate: request.toDate as number, timezone: request.timezone as string, objective: request.objective as string },
+          ...(source === undefined ? {} : { source }) });
+      } catch { return fail("input"); }
       let observedIntent: StandingHistoryTaskIntent | undefined;
       return operation(callSignal, async scope => {
         observe({ kind: "invalidate", taskRef: requested.taskId, requesterId: requested.requesterId });
@@ -317,7 +332,7 @@ export async function openStandingHistoryTaskManager(input: Readonly<{
         state = await control.status(); scope.guard();
         if (state.storage !== "ready") return fail("storage"); if (state.state === "cancelled") return fail("cancelled");
         observedIntent = intent;
-        return Object.freeze({ taskRef: intent.taskId, control: state, ...material });
+        return Object.freeze({ taskRef: intent.taskId, ...(intent.source ? { source: "community" as const } : {}), control: state, ...material });
       }, status => { if (observedIntent) observe({ kind: "snapshot", intent: observedIntent, status }); });
     },
     async status(value) {
@@ -330,7 +345,7 @@ export async function openStandingHistoryTaskManager(input: Readonly<{
         const material = await progress(intent, scope, false); const current = await control.status(); scope.guard();
         if (current.headHash !== state.headHash) return fail("conflict");
         observedIntent = intent;
-        return Object.freeze({ taskRef: intent.taskId, control: current, ...material });
+        return Object.freeze({ taskRef: intent.taskId, ...(intent.source ? { source: "community" as const } : {}), control: current, ...material });
       }, status => { if (observedIntent) observe({ kind: "snapshot", intent: observedIntent, status }); });
     },
     async cancel(value) {
@@ -348,7 +363,7 @@ export async function openStandingHistoryTaskManager(input: Readonly<{
         try { await onCancelled(Object.freeze({ taskRef: intent.taskId, revision: 1 })); } catch { return fail("revocation"); }
         scope.guard(); const confirmed = await control.status(); scope.guard();
         if (confirmed.storage !== "ready" || confirmed.state !== "cancelled" || confirmed.headHash !== cancelled.headHash) return fail("storage");
-        return Object.freeze({ taskRef: intent.taskId, control: confirmed, revocationJoined: true });
+        return Object.freeze({ taskRef: intent.taskId, ...(intent.source ? { source: "community" as const } : {}), control: confirmed, revocationJoined: true });
       });
     },
     close() { closed = true; return shutdown(); }

@@ -1,10 +1,13 @@
 import type { Readable, Writable } from "node:stream";
 import { performance } from "node:perf_hooks";
+import { types } from "node:util";
+import { STANDING_VISUAL_BYTES } from "./standing-visual-input.js";
 
-export const EPOCH_FRAME_BYTES = 786432;
-export const EPOCH_TOTAL_BYTES = 16 * (12 * 1024 * 1024 + 128 * 1024);
-export const EPOCH_QUEUE_BYTES = 3 * 1024 * 1024;
+export const EPOCH_FRAME_BYTES = 3 * 1024 * 1024;
+export const EPOCH_TOTAL_BYTES = 512 * 1024 * 1024;
+export const EPOCH_QUEUE_BYTES = 12 * 1024 * 1024;
 export const EPOCH_QUEUE_FRAMES = 32;
+export const EPOCH_VISUAL_FRAME_BYTES = 12 * 1024 * 1024;
 export type EpochWireCode = "closed" | "eof" | "partial-eof" | "frame" | "bounds" | "read" | "write" | "concurrent-read" | "concurrent-write" | "timeout-value";
 export class EpochWireError extends Error {
   constructor(readonly code: EpochWireCode) { super("EPOCH_WIRE_" + code.toUpperCase()); this.name = "EpochWireError"; }
@@ -32,6 +35,49 @@ function parse(bytes: Buffer): unknown {
   } catch { throw new EpochWireError("frame"); }
 }
 
+/** Outbound pool images only. Share this gate with the multiplex writer so an
+ * ordinary frame cannot acquire a larger budget merely by nesting `images`.
+ * The producer's exact two-image / 8 MiB pixel and 24 KiB input limits remain
+ * unchanged. This validates transport shape, not image semantics or custody. */
+export function getStandingMultiplexVisualFrameLimit(value: unknown): number {
+  const fail = (): never => { throw new EpochWireError("frame"); };
+  const record = (v: unknown): Record<string, unknown> => {
+    if (!v || typeof v !== "object" || types.isProxy(v) || Object.getPrototypeOf(v) !== Object.prototype) return fail();
+    const descriptors = Object.getOwnPropertyDescriptors(v), result: Record<string, unknown> = {};
+    for (const key of Reflect.ownKeys(descriptors)) {
+      if (typeof key !== "string") return fail();
+      const d = descriptors[key]!;
+      if (!("value" in d) || !d.enumerable) return fail();
+      Object.defineProperty(result, key, { value: d.value, enumerable: true });
+    }
+    return result;
+  };
+  const exact = (v: Record<string, unknown>, keys: readonly string[]) => Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
+  const id = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(v);
+  const outer = record(value);
+  if (!Object.hasOwn(outer, "workerId") || !Object.hasOwn(outer, "frame")) return EPOCH_FRAME_BYTES;
+  const frame = record(outer.frame);
+  if (frame.kind !== "turn" || !Object.hasOwn(frame, "images")) return EPOCH_FRAME_BYTES;
+  if (!exact(outer, ["workerId", "frame"]) || !id(outer.workerId) ||
+      !exact(frame, ["kind", "purpose", "requestRef", "input", "images"]) || frame.purpose !== "conversation" || !id(frame.requestRef) ||
+      typeof frame.input !== "string" || !frame.input.trim() || frame.input.includes("\0") || Buffer.byteLength(frame.input) > 24576 ||
+      Buffer.from(frame.input).toString() !== frame.input) return fail();
+  const images = frame.images;
+  if (types.isProxy(images) || !Array.isArray(images) || Object.getPrototypeOf(images) !== Array.prototype || images.length < 1 || images.length > 2 ||
+      Reflect.ownKeys(images).length !== images.length + 1) return fail();
+  let total = 0;
+  for (let i = 0; i < images.length; i++) {
+    const slot = Object.getOwnPropertyDescriptor(images, String(i));
+    if (!slot || !("value" in slot) || !slot.enumerable) return fail();
+    const image = record(slot.value);
+    if (!exact(image, ["mimeType", "base64"]) || image.mimeType !== "image/png" && image.mimeType !== "image/jpeg" ||
+        typeof image.base64 !== "string" || !image.base64.length || image.base64.length > Math.ceil(STANDING_VISUAL_BYTES / 3) * 4) return fail();
+    const bytes = Buffer.from(image.base64, "base64");
+    if (!bytes.length || (total += bytes.length) > STANDING_VISUAL_BYTES || bytes.toString("base64") !== image.base64) return fail();
+  }
+  return EPOCH_VISUAL_FRAME_BYTES;
+}
+
 /** One pending operation per direction; read and write may proceed together.
  * Read timeout is nonfatal and preserves input. Write timeout revokes the wire:
  * submitted bytes may already have been written and must never be replayed.
@@ -42,9 +88,12 @@ function parse(bytes: Buffer): unknown {
  * read timeout and nonfatal caller/concurrency errors. Its exceptions are ignored.
  * Pass byte-mode streams without setEncoding; parsed objects transfer to caller.
  */
-export function createEpochWire({readable,writable,onFault}: {
+export function createEpochWire({readable,writable,onFault,multiplexVisualInputs}: {
   readable: Readable; writable: Writable; onFault?(error: Fault): void;
+  /** Explicit outbound parallel envelope mode. Inbound frame limits do not change. */
+  multiplexVisualInputs?: true;
 }): EpochWire {
+  if (multiplexVisualInputs !== undefined && multiplexVisualInputs !== true) throw new EpochWireError("frame");
   let terminal: Fault | undefined, inputEnded = false, writesSealed = false;
   let inputBytes = 0, outputBytes = 0, pendingLength = 0, queuedBytes = 0;
   const partial = Buffer.alloc(EPOCH_FRAME_BYTES);
@@ -128,8 +177,10 @@ export function createEpochWire({readable,writable,onFault}: {
       let bytes: Buffer = Buffer.alloc(0);
       try {
         if (frame === null || typeof frame !== "object" || Array.isArray(frame)) throw new EpochWireError("frame");
+        const limit = multiplexVisualInputs ? getStandingMultiplexVisualFrameLimit(frame) :
+          (frame as {kind?:unknown}).kind==="turn"&&Object.hasOwn(frame,"images")?EPOCH_VISUAL_FRAME_BYTES:EPOCH_FRAME_BYTES;
         const text = JSON.stringify(frame);
-        if (typeof text !== "string" || Buffer.byteLength(text) > (frame!==null&&typeof frame==="object"&&(frame as {kind?:unknown}).kind==="turn"&&Object.hasOwn(frame,"images")?12*1024*1024:EPOCH_FRAME_BYTES)) throw new EpochWireError("bounds");
+        if (typeof text !== "string" || Buffer.byteLength(text) > limit) throw new EpochWireError("bounds");
         bytes = Buffer.from(text + "\n"); parse(bytes.subarray(0,bytes.length - 1));
         if (outputBytes + bytes.length > EPOCH_TOTAL_BYTES) { bytes.fill(0); throw new EpochWireError("bounds"); }
       } catch (error) { bytes.fill(0); return Promise.reject(error instanceof EpochWireError ? error : new EpochWireError("frame")); }

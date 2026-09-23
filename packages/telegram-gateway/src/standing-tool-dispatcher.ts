@@ -13,16 +13,18 @@ function record(value:unknown,keys:string[]):Record<string,unknown>{
   for(const key of keys){const d=Object.getOwnPropertyDescriptor(value,key);if(!d||!("value"in d))return fail();result[key]=d.value;}
   return result;
 }
-function result(value:unknown):EpochToolResult{
+export const ANALYSIS_TOOL_TEXT_BYTES = 1088 * 1024;
+export const ANALYSIS_TOOL_RESULT_BYTES = 2 * ANALYSIS_TOOL_TEXT_BYTES + 512;
+function result(value:unknown,analysis=false):EpochToolResult{
   const v=record(value,["success","contentItems"]),items=v.contentItems;
   if(typeof v.success!=="boolean"||!Array.isArray(items)||items.length!==1||Reflect.ownKeys(items).length!==2)return fail();
   const d=Object.getOwnPropertyDescriptor(items,"0");if(!d||!("value"in d))return fail();
   const item=record(d.value,["type","text"]);
-  if(item.type!=="inputText"||typeof item.text!=="string"||Buffer.byteLength(item.text)>65536||Buffer.from(item.text).toString()!==item.text)return fail();
+  if(item.type!=="inputText"||typeof item.text!=="string"||Buffer.byteLength(item.text)>(analysis?ANALYSIS_TOOL_TEXT_BYTES:65536)||Buffer.from(item.text).toString()!==item.text)return fail();
   let decoded:unknown;try{decoded=JSON.parse(item.text);}catch{return fail();}
   if(!decoded||typeof decoded!=="object"||Array.isArray(decoded))return fail();
   const captured=Object.freeze({success:v.success,contentItems:Object.freeze([Object.freeze({type:"inputText" as const,text:item.text})]) as EpochToolResult["contentItems"]});
-  if(Buffer.byteLength(JSON.stringify(captured))>131584)return fail();return captured;
+  if(Buffer.byteLength(JSON.stringify(captured))>(analysis?ANALYSIS_TOOL_RESULT_BYTES:131584))return fail();return captured;
 }
 
 export function createStandingToolDispatcher(history:{call(argumentsValue:unknown):Promise<unknown>},extraTools:readonly EpochExtraTool[]){
@@ -32,12 +34,12 @@ export function createStandingToolDispatcher(history:{call(argumentsValue:unknow
 
 /** Explicit registry for an isolated scope. No implicit raw-history capability.
  * The host session still validates its exact purpose-specific names/order. */
-export function createStandingNamedToolDispatcher(tools:readonly EpochExtraTool[]){
+export function createStandingNamedToolDispatcher(tools:readonly EpochExtraTool[],purpose?:"history-analysis"){
   if(!Array.isArray(tools)||tools.length===0)return fail();
-  return createDispatcher(undefined,tools);
+  return createDispatcher(undefined,tools,purpose==="history-analysis");
 }
 
-function createDispatcher(historyCall:((argumentsValue:unknown)=>Promise<unknown>)|undefined,extraTools:readonly EpochExtraTool[]){
+function createDispatcher(historyCall:((argumentsValue:unknown)=>Promise<unknown>)|undefined,extraTools:readonly EpochExtraTool[],analysis=false){
   if(!Array.isArray(extraTools)||extraTools.length>(historyCall?31:32)||
       Reflect.ownKeys(extraTools).length!==extraTools.length+1)return fail();
   const handlers=new Map<string,EpochExtraTool["call"]>();
@@ -62,7 +64,7 @@ function createDispatcher(historyCall:((argumentsValue:unknown)=>Promise<unknown
       void(async()=>{
         try{
           const value=await handlers.get(name)!(argumentsValue,copiedScope);
-          if(closed||copiedScope.signal.aborted)return fail();done(result(value));
+          if(closed||copiedScope.signal.aborted)return fail();done(result(value,analysis));
         }catch{failed(new StandingToolDispatchError());}
       })();
       try{return await pending;}finally{if(active===pending)active=undefined;}

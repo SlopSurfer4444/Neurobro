@@ -46,14 +46,21 @@ export function verifyStandingBuild(build, bytes, expectedHash) {
   assert.equal(new Set(expected).size, expected.length); assert.deepEqual(actual.sort(), expected.sort());
   for (const name of ['standing-host.mjs', 'standing-recovery.py', 'src/standing-service.js', 'src/windows-credential-vault.js',
     'src/pilot-greeting.js', 'model/rm-0032-standing-epoch-host.mjs', 'model/rm-0032-standing-epoch-runtime.mjs',
-    'model/rm-0032-standing-epoch-owner.mjs', 'model/rm-0032-standing-epoch-receipt.mjs',
+    'model/rm-0032-standing-parallel-runtime.mjs', 'model/history-parallel-native-pool.py',
+    'model/history-parallel-native-adapter.py', 'model/history-parallel-native-session.py', 'model/history-parallel-native-client.py',
+    'model/rm-0032-standing-epoch-owner.mjs', 'model/rm-0032-standing-epoch-receipt.mjs', 'model/rm-0032-standing-epoch-recovery.mjs',
     'src/standing-epoch-session.js', 'src/standing-epoch-wire.js', 'src/standing-native-turn.js', 'src/standing-context-restoration.js',
-    'src/self-history-reader.js', 'src/self-history-tool.js', 'src/standing-repository-tools.js', 'repository-snapshot.json',
+    'src/self-history-reader.js', 'src/self-history-tool.js', 'src/standing-chat-search.js',
+    'src/standing-observed-source-policy.js', 'src/standing-observed-source-reader.js', 'src/standing-repository-tools.js', 'repository-snapshot.json',
     'src/conversation-references.js', 'src/generated-image-receiver.js', 'src/standing-model-result.js', 'package.json']) assert.ok(expected.includes(name));
   for (const module of ['standing-scoped-epoch-session', 'standing-history-analysis-attempt-store', 'standing-history-analysis-planner',
     'standing-history-analysis-runtime', 'standing-history-analysis-step', 'standing-history-analysis-store', 'standing-history-analysis-view',
+    'standing-history-chronicle-cache', 'standing-history-chronicle-reuse-store', 'standing-history-parallel-analysis-runtime',
+    'standing-history-parallel-maintenance', 'standing-history-parallel-planner', 'standing-history-parallel-work-store', 'standing-history-period-chronicle',
+    'standing-history-period-chronicle-store', 'standing-history-period-chronicle-turn', 'standing-multiplex-epoch-wire', 'standing-parallel-epoch-session',
     'standing-history-read-runner', 'standing-history-read-step', 'standing-history-source-projection', 'standing-history-task-control-store',
-    'standing-history-task-delivery', 'standing-history-task-discovery', 'standing-history-task-disposition', 'standing-history-task-manager',
+    'standing-history-final-report-store', 'standing-history-final-report', 'standing-history-final-report-material',
+    'standing-history-task-delivery', 'standing-history-task-delivery-recovery', 'standing-history-task-discovery', 'standing-history-task-disposition', 'standing-history-task-manager',
     'standing-history-task-request', 'standing-history-task-runner', 'standing-history-task-runtime', 'standing-history-task-store',
     'standing-history-task-tools', 'standing-chronicle-note', 'standing-history-task-context', 'standing-history-task-memory',
     'standing-own-action-capture', 'standing-own-action-checkpoint', 'standing-own-action-memory', 'standing-own-action-projection',
@@ -69,7 +76,7 @@ export function checkPrivateAcl() {
 }
 
 function regular(stat, cap) { assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size > 0 && stat.size <= cap); }
-export function readMetadata(file, cap = 16384) {
+export function readMetadata(file, cap = 16384, expectedHash) {
   const before = lstatSync(file); regular(before, cap);
   const handle = openSync(file, 'r');
   try {
@@ -79,14 +86,15 @@ export function readMetadata(file, cap = 16384) {
     const after = lstatSync(file); regular(after, cap);
     assert.equal(after.dev, opened.dev); assert.equal(after.ino, opened.ino); assert.equal(after.size, opened.size);
     assert.equal(Buffer.from(bytes.toString('utf8')).equals(bytes), true);
+    if (expectedHash !== undefined) { assert.match(expectedHash, HASH); assert.equal(sha(bytes), expectedHash); }
     return JSON.parse(bytes.toString('utf8'));
   } finally { closeSync(handle); }
 }
-function writeNew(file, value) {
+export function writeNew(file, value) {
   const handle = openSync(file, 'wx', 0o600);
   try { writeFileSync(handle, JSON.stringify(value) + '\n'); fsyncSync(handle); } finally { closeSync(handle); }
 }
-function safeDirectory(dir, create = false) {
+export function safeDirectory(dir, create = false) {
   if (!existsSync(dir) && create) mkdirSync(dir, { mode: 0o700 });
   const stat = lstatSync(dir); assert.ok(stat.isDirectory() && !stat.isSymbolicLink());
 }
@@ -149,7 +157,7 @@ export function settledModelReceipt(value, token, normalizeOwnerRecord) {
 // A named mutex serializes recovery even when someone manually starts the same task.
 // Its helper holds no secrets, reads no host input and releases on parent-pipe EOF.
 export const MUTEX_SCRIPT = "$ErrorActionPreference='Stop';$m=$null;$held=$false;try{$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$m=[Threading.Mutex]::new($false,('Global\\DecadansNeurobroStandingV1-'+$sid));try{$held=$m.WaitOne(0)}catch [Threading.AbandonedMutexException]{$held=$true};if(!$held){exit 2};[Console]::Out.WriteLine('READY');[Console]::Out.Flush();$s=[Console]::OpenStandardInput();$b=New-Object byte[] 1;while($s.Read($b,0,1) -gt 0){};exit 0}catch{exit 1}finally{if($held){$m.ReleaseMutex()};if($m){$m.Dispose()}}";
-function hostError(code) { const error = new Error(code); error.code = code; return error; }
+export function hostError(code) { const error = new Error(code); error.code = code; return error; }
 async function boundedClose(close, child, milliseconds = 5000) {
   let timer;
   const outcome = await Promise.race([close, new Promise(done => { timer = setTimeout(() => done(null), milliseconds); })]);
@@ -211,29 +219,59 @@ export async function publicHelper(file, argv, input, signal, spawnPort = spawn,
 // Check its public token marker as well as the subsequent Linux /proc proof.
 export const WINDOWS_CONTROLLERS_SCRIPT = "$ErrorActionPreference='Stop';try{$raw=[Console]::In.ReadToEnd();if($raw.Length -gt 400000){exit 1};$v=ConvertFrom-Json $raw;if(@($v.PSObject.Properties).Count -ne 1 -or @($v.PSObject.Properties)[0].Name -ne 'tokens'){exit 1};$set=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal);foreach($t in @($v.tokens)){if($t -isnot [string] -or $t -cnotmatch '^[a-f0-9]{32}$' -or !$set.Add($t)){exit 1}};if($set.Count -gt 10000){exit 1};$clear=$true;$procs=@(Get-CimInstance Win32_Process -Filter \"Name='wsl.exe'\" -ErrorAction Stop);foreach($p in $procs){if($null -eq $p.CommandLine){exit 1};foreach($m in [regex]::Matches($p.CommandLine,'(?:^|[\\s\"])decadans-standing-token=([a-f0-9]{32})(?=$|[\\s\"])')){if($set.Contains($m.Groups[1].Value)){$clear=$false}}};[Console]::Out.WriteLine((@{version='standing-windows-recovery-v1';controllersAbsent=$clear;checked=$set.Count}|ConvertTo-Json -Compress));exit 0}catch{exit 1}";
 
-export async function prepareModel(build = BUILD) {
-  const module = await import(pathToFileURL(resolve(build, 'model/rm-0032-standing-epoch-runtime.mjs')).href);
-  const { SOURCE_NAMES, preparePacket } = await import(pathToFileURL(resolve(build, 'model/rm-0032-standing-epoch-host.mjs')).href);
+export async function prepareModel(build = BUILD, profile = {}) {
+  exact(profile, [...(Object.hasOwn(profile, 'workProfile') ? ['workProfile'] : []), ...(Object.hasOwn(profile, 'sessionMode') ? ['sessionMode'] : []),
+    ...(Object.hasOwn(profile, 'parallelOptions') ? ['parallelOptions'] : [])]);
+  if (Object.hasOwn(profile, 'workProfile')) assert.ok(['team-assistant', 'community-team'].includes(profile.workProfile));
+  if (Object.hasOwn(profile, 'sessionMode')) assert.ok(['standing-scoped-epoch-v1', 'standing-scoped-epoch-v2', 'standing-parallel-epoch-v1'].includes(profile.sessionMode));
+  const parallel = profile.sessionMode === 'standing-parallel-epoch-v1';
+  assert.equal(Object.hasOwn(profile, 'parallelOptions'), parallel);
+  if (parallel) {
+    exact(profile.parallelOptions, ['analysisWorkers', 'communityAssessment']);
+    assert.ok(Number.isSafeInteger(profile.parallelOptions.analysisWorkers) && profile.parallelOptions.analysisWorkers >= 1 &&
+      profile.parallelOptions.analysisWorkers <= 7 - Number(profile.parallelOptions.communityAssessment));
+    assert.equal(typeof profile.parallelOptions.communityAssessment, 'boolean');
+  }
+  const module = await import(pathToFileURL(resolve(build, parallel ? 'model/rm-0032-standing-parallel-runtime.mjs' : 'model/rm-0032-standing-epoch-runtime.mjs')).href);
+  const { SOURCE_NAMES, PARALLEL_SOURCE_NAMES, preparePacket } = await import(pathToFileURL(resolve(build, 'model/rm-0032-standing-epoch-host.mjs')).href);
   const { normalizeEpochOwnerRecord } = await import(pathToFileURL(resolve(build, 'model/rm-0032-standing-epoch-receipt.mjs')).href);
   const { createEpochWire } = await import(pathToFileURL(resolve(build, 'src/standing-epoch-wire.js')).href);
   const { isEpochTurnNotAdmitted } = await import(pathToFileURL(resolve(build, 'src/standing-epoch-session.js')).href);
-  const { openStandingScopedEpochSession } = await import(pathToFileURL(resolve(build, 'src/standing-scoped-epoch-session.js')).href);
+  const scopedSessionModule = await import(pathToFileURL(resolve(build, 'src/standing-scoped-epoch-session.js')).href);
+  const sessionModule = parallel ? await import(pathToFileURL(resolve(build, 'src/standing-parallel-epoch-session.js')).href) : scopedSessionModule;
+  const openStandingEpochSession = parallel ? sessionModule.openStandingParallelEpochSession : sessionModule.openStandingScopedEpochSession;
+  assert.equal(typeof openStandingEpochSession, 'function'); assert.equal(typeof scopedSessionModule.StandingWorkerTurnNotAdmitted, 'function');
+  const isWorkerTurnNotAdmitted = error => error instanceof scopedSessionModule.StandingWorkerTurnNotAdmitted;
   const { createRepositoryTools } = await import(pathToFileURL(resolve(build, 'src/standing-repository-tools.js')).href);
   // Read only the immutable manifest-verified source snapshot, never the user's
   // working directory or private runtime files on behalf of a model request.
   const repositorySnapshot = readMetadata(resolve(build, 'repository-snapshot.json'), 64 * 1024 * 1024);
   const repository = createRepositoryTools({ snapshot: repositorySnapshot, signal: new AbortController().signal });
   await repository.close();
-  const sources = Object.fromEntries(Object.entries(SOURCE_NAMES).map(([key, name]) => [key, readFileSync(resolve(build, 'model', name), 'utf8')]));
+  const sourceNames = parallel ? { ...SOURCE_NAMES, ...PARALLEL_SOURCE_NAMES } : SOURCE_NAMES;
+  const sources = Object.fromEntries(Object.entries(sourceNames).map(([key, name]) => [key, readFileSync(resolve(build, 'model', name), 'utf8')]));
   const pins = Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, sha(source)]));
   // Pure source/capsule validation. The protected attempts directory and worker
   // identity do not exist yet, and preparation must not spawn a model process.
-  preparePacket({ sources, pins, token: '0'.repeat(32), sessionMode: 'standing-scoped-epoch-v1' });
-  return { module, sources, pins, normalizeEpochOwnerRecord, createEpochWire, openStandingScopedEpochSession, isEpochTurnNotAdmitted, repositorySnapshot };
+  preparePacket({ sources, pins, token: '0'.repeat(32), sessionMode: 'standing-scoped-epoch-v1', ...profile });
+  const prepareRuntime = parallel ? module.prepareStandingParallelRuntime : module.prepareStandingEpochRuntime;
+  assert.equal(typeof prepareRuntime, 'function');
+  // The calling host has already verified the immutable build manifest. These
+  // revisions therefore identify the exact admitted native prompt, projector
+  // and output schema implementation rather than caller-supplied labels.
+  const historyChronicleProducer = Object.freeze({ model: 'gpt-6-astra;effort=medium', promptVersion: pins.client,
+    projectionVersion: sha(readFileSync(resolve(build, 'src/standing-history-source-projection.js'))),
+    outputVersion: sha(readFileSync(resolve(build, 'src/standing-history-analysis-store.js'))) });
+  return { module, prepareRuntime, sources, pins, normalizeEpochOwnerRecord, createEpochWire,
+    openStandingEpochSession, ...(parallel ? {} : { openStandingScopedEpochSession: openStandingEpochSession }),
+    isEpochTurnNotAdmitted, isWorkerTurnNotAdmitted, repositorySnapshot, historyChronicleProducer };
+}
+export function checkPinnedNode() {
+  const stat = lstatSync(NODE); assert.ok(stat.isFile() && !stat.isSymbolicLink()); assert.equal(sha(readFileSync(NODE)), NODE_HASH);
 }
 export async function prepare(expectedHash) {
   verifyStandingBuild(BUILD, readFileSync(MANIFEST), expectedHash);
-  const stat = lstatSync(NODE); assert.ok(stat.isFile() && !stat.isSymbolicLink()); assert.equal(sha(readFileSync(NODE)), NODE_HASH);
+  checkPinnedNode();
   checkPrivateAcl(); assert.equal(sha(readFileSync(paths.modelReceiptPath)), RECEIPT_HASH);
   assert.equal(existsSync(paths.attemptDirectory), false); assert.equal(existsSync(paths.killSwitchPath), false);
   const { preparePilotGreeting } = await import(pathToFileURL(resolve(BUILD, 'src/pilot-greeting.js')).href);
@@ -253,9 +291,9 @@ function modelInventory(modelRoot, normalizeOwnerRecord) {
   }
   return { all: names, pending };
 }
-async function probeGuest(tokens, signal) {
+export async function probeGuest(tokens, signal, build = BUILD) {
   if (!tokens.length) return true;
-  const source = readFileSync(resolve(BUILD, 'standing-recovery.py'), 'utf8');
+  const source = readFileSync(resolve(build, 'standing-recovery.py'), 'utf8');
   const output = await publicHelper(WSL, ['--distribution', 'DecadansNeurobro', '--user', 'root', '--exec',
     '/usr/bin/python3.12', '-I', '-S', '-B', '-c', source], JSON.stringify({ tokens }), signal);
   const value = JSON.parse(output); exact(value, ['version', 'settled', 'controllersAbsent', 'unitsAbsent', 'checked']);
@@ -268,6 +306,22 @@ async function probeWindows(tokens, signal) {
   const value = JSON.parse(output); exact(value, ['version', 'controllersAbsent', 'checked']);
   assert.equal(value.version, 'standing-windows-recovery-v1'); assert.equal(value.checked, tokens.length);
   assert.equal(typeof value.controllersAbsent, 'boolean'); return value.controllersAbsent;
+}
+export const WINDOWS_WORKER_SCRIPT = "$ErrorActionPreference='Stop';try{$v=ConvertFrom-Json ([Console]::In.ReadToEnd());if(@($v.PSObject.Properties).Count -ne 1 -or $v.pid -isnot [long] -and $v.pid -isnot [int] -or $v.pid -le 0 -or $v.pid -gt 4294967295){exit 1};$p=@(Get-CimInstance Win32_Process -Filter ('ProcessId='+$v.pid) -ErrorAction Stop);if($p.Count -gt 1){exit 1};$created=$null;if($p.Count -eq 1){if($null -eq $p[0].CreationDate){exit 1};$created=$p[0].CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')};[Console]::Out.WriteLine((@{version='standing-worker-presence-v1';pid=$v.pid;present=($p.Count -eq 1);createdAt=$created}|ConvertTo-Json -Compress));exit 0}catch{exit 1}";
+export function originalWorkerAbsent(intent, snapshot) {
+  validateWorkerIntent(intent); exact(snapshot, ['version', 'pid', 'present', 'createdAt']);
+  assert.equal(snapshot.version, 'standing-worker-presence-v1'); assert.equal(snapshot.pid, intent.pid); assert.equal(typeof snapshot.present, 'boolean');
+  if (!snapshot.present) { assert.equal(snapshot.createdAt, null); return true; }
+  assert.equal(typeof snapshot.createdAt, 'string'); assert.equal(new Date(snapshot.createdAt).toISOString(), snapshot.createdAt);
+  // startedAt is an upper bound on original process creation, not its OS birth
+  // identity. Only a strictly later incarnation proves PID reuse. Older/equal
+  // timestamps or uninspectable metadata never establish absence.
+  return Date.parse(snapshot.createdAt) > Date.parse(intent.startedAt);
+}
+async function probeOriginalWorkerAbsent(intent, signal) {
+  if (!processAlive(intent.pid)) return true;
+  const output = await publicHelper(PS, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', WINDOWS_WORKER_SCRIPT], JSON.stringify({ pid: intent.pid }), signal);
+  return originalWorkerAbsent(intent, JSON.parse(output));
 }
 function waitForRetry(milliseconds, signal) {
   return new Promise(done => {
@@ -295,9 +349,10 @@ export function preservePause(hostRoot, workerToken) {
 }
 /** Called only while the host owns the named mutex. All subprocess adapters
  * are read-only; fixtures inject absence and time without launching anything. */
-export async function reconcileStandingState({ lockPath = LOCK, hostRoot = HOST_ROOT, modelRoot = MODEL_ROOT, signal, normalizeEpochOwnerRecord }, ports = {}) {
+export async function reconcileStandingState({ lockPath = LOCK, hostRoot = HOST_ROOT, modelRoot = MODEL_ROOT, signal, normalizeEpochOwnerRecord, epochRecovery }, ports = {}) {
   const alive = ports.alive ?? processAlive, windowsAbsent = ports.windowsAbsent ?? probeWindows,
     guestAbsent = ports.guestAbsent ?? probeGuest, wait = ports.wait ?? waitForRetry, now = ports.now ?? Date.now;
+  const workerAbsent = ports.workerAbsent ?? (ports.alive ? async intent => !alive(intent.pid) : probeOriginalWorkerAbsent);
   if (existsSync(resolve(hostRoot, 'paused.json'))) throw hostError('STANDING_PERMANENTLY_BLOCKED');
   assert.equal(existsSync(lockPath + '.sticky'), false);
   let bytes, owner;
@@ -311,7 +366,10 @@ export async function reconcileStandingState({ lockPath = LOCK, hostRoot = HOST_
       try { const intent = validateWorkerIntent(readMetadata(resolve(dir, 'intent.json')));
         assert.equal(intent.workerToken, name); return [intent]; } catch { return []; }
     });
-    owner = locateOwnedStaleLock(bytes, intents, alive);
+    // Select the exact durable lock first, then resolve the original process
+    // incarnation. A later process may legitimately have reused its numeric PID.
+    owner = locateOwnedStaleLock(bytes, intents, () => false);
+    if (!await workerAbsent(owner, signal)) throw hostError('STANDING_RECOVERY_PENDING');
     const resultFile = resolve(hostRoot, owner.workerToken, 'result.json');
     if (existsSync(resultFile)) {
       const previous = readMetadata(resultFile);
@@ -323,19 +381,66 @@ export async function reconcileStandingState({ lockPath = LOCK, hostRoot = HOST_
     }
   }
   const { all, pending } = modelInventory(modelRoot, normalizeEpochOwnerRecord), deadline = now() + 330000;
+  // Recovery is an admitted host policy, never supplied by a task/model. The
+  // caller owns the named mutex; losing it aborts the same signal.
+  const recoveryCandidates = [];
+  if (epochRecovery !== undefined) {
+    exact(epochRecovery, ['authorizationHash', 'module']); assert.match(epochRecovery.authorizationHash, HASH);
+    for (const name of ['inspectStandingEpochRecoveryCandidate', 'readStandingEpochRecovery', 'writeStandingEpochRecovery']) assert.equal(typeof epochRecovery.module[name], 'function');
+    for (const epochId of pending) {
+      const directory = resolve(modelRoot, epochId); let candidate, previous;
+      // Old legacy/torn epochs still require physical absence, but cannot gain
+      // a fabricated binding. Their individual task remains contained.
+      try {
+        candidate = await epochRecovery.module.inspectStandingEpochRecoveryCandidate({ directory, epochId });
+        previous = validateWorkerIntent(readMetadata(resolve(hostRoot, candidate.workerToken, 'intent.json')));
+        assert.equal(previous.workerToken, candidate.workerToken);
+      } catch { continue; }
+      let saved;
+      try { saved = await epochRecovery.module.readStandingEpochRecovery({ directory, epochId }); }
+      catch { continue; } // A torn receipt blocks only this task; preserve bytes.
+      if (saved) continue; // Already proven extinction does not depend on PID reuse.
+      if (!await workerAbsent(previous, signal)) throw hostError('STANDING_RECOVERY_PENDING');
+      recoveryCandidates.push({ directory, epochId, candidate, previous });
+    }
+  }
+  let physicalCheckedAt;
   while (true) {
     if (signal.aborted) throw hostError('STANDING_STOPPED');
     // Check ALL tracked Windows markers even for receipts that already report
     // guest settlement; no late-starting WSL parent may survive admission.
-    if (await windowsAbsent(all, signal) && await guestAbsent(pending, signal) && await windowsAbsent(all, signal)) break;
+    if (await windowsAbsent(all, signal) && await guestAbsent(pending, signal) && await windowsAbsent(all, signal)) { physicalCheckedAt = new Date().toISOString(); break; }
     if (now() >= deadline) throw hostError('STANDING_RECOVERY_PENDING');
     await wait(5000, signal);
+  }
+  if (signal.aborted) throw hostError('STANDING_STOPPED');
+  // Preserve every original record, including an authentic unsettled actual.
+  // A partial crash may leave a prefix of receipts: next startup verifies and
+  // reuses those exact immutable bindings instead of dispatching anything.
+  for (const { directory, epochId, candidate, previous } of recoveryCandidates) {
+    if (signal.aborted) throw hostError('STANDING_STOPPED');
+    if (!await workerAbsent(previous, signal)) throw hostError('STANDING_RECOVERY_PENDING');
+    const physical = { exclusiveCustody: true, windowsBeforeAbsent: true, guestAbsent: true, windowsAfterAbsent: true,
+      checkedAt: physicalCheckedAt, receiptHash: sha(JSON.stringify({ version: 'standing-auto-physical-proof-v1',
+        epochId, ...candidate, authorizationHash: epochRecovery.authorizationHash, workerIntent: previous,
+        checkedAt: physicalCheckedAt, windowsTokens: all, guestTokens: pending })) };
+    await epochRecovery.module.writeStandingEpochRecovery({ directory, epochId, authorizationHash: epochRecovery.authorizationHash,
+      intentHash: candidate.intentHash, controllerHash: candidate.controllerHash, actualHash: candidate.actualHash,
+      checkPhysicalSettlement: async () => {
+        if (signal.aborted) throw hostError('STANDING_STOPPED');
+        assert.deepEqual(validateWorkerIntent(readMetadata(resolve(hostRoot, candidate.workerToken, 'intent.json'))), previous);
+        if (!await workerAbsent(previous, signal)) throw hostError('STANDING_RECOVERY_PENDING'); return physical;
+      } });
+    if (signal.aborted) throw hostError('STANDING_STOPPED');
   }
   if (!owner) return;
   if (signal.aborted) throw hostError('STANDING_STOPPED');
   writeNew(resolve(hostRoot, owner.workerToken, 'reconciled-' + randomBytes(16).toString('hex') + '.json'),
     { version: 'standing-reconcile-v1', workerToken: owner.workerToken, lockSha256: sha(bytes), processesAbsent: true, attemptsPreserved: true });
-  assert.equal(readFileSync(lockPath, 'utf8'), bytes); assert.equal(alive(owner.pid), false); unlinkSync(lockPath);
+  assert.equal(readFileSync(lockPath, 'utf8'), bytes);
+  if (!await workerAbsent(owner, signal)) throw hostError('STANDING_RECOVERY_PENDING');
+  if (signal.aborted) throw hostError('STANDING_STOPPED');
+  assert.equal(readFileSync(lockPath, 'utf8'), bytes); unlinkSync(lockPath);
 }
 
 export function trackedModelExecute(execute, workerToken, spawnPort = spawn) {
@@ -360,7 +465,11 @@ export function normalizeStandingResult(value) {
   return { version: 'standing-host-result-v1', status: value.status, code: value.status === 'stopped' ? 'STANDING_STOPPED' : 'STANDING_BLOCKED',
     clientSettled: value.clientSettled, lockPreserved: value.lockPreserved, verifiedReplies: value.verifiedReplies,
     failureStage: ['prepare','lock','session','state','connect','self','adapter','wait','model','send','settle','none'].includes(value.failureStage) ? value.failureStage : 'not_reported',
-    failureCode: ['none','transport','binding','protocol','backlog','checkpoint','aborted','other'].includes(value.failureCode) ? value.failureCode : 'not_reported' };
+    failureCode: ['none','transport','binding','protocol','backlog','checkpoint','aborted','other'].includes(value.failureCode) ? value.failureCode : 'not_reported',
+    ...(value.failureStage === 'wait' && ['history-poll','adapter-poll','participant-due','participant-step'].includes(value.waitFailureOrigin) ? {
+      waitFailureOrigin: value.waitFailureOrigin,
+      ...(['input','busy','closed','aborted','adapter','discovery','step','close','storage','binding','conflict','capacity','limit','consumed','stale','cancelled','owner','outcome','settlement','settlement_unknown','failed','community_assessment_timeout','parallel-consumed-without-prepared','transport','protocol','checkpoint','backlog','state','analysis_admission','analysis_scope','prepare_unknown','controller_unknown','record','release_required','mode','config','turn','stopped','start_unknown'].includes(value.waitFailureCode) ? { waitFailureCode: value.waitFailureCode } : {})
+    } : {}) };
 }
 
 export function statusWriter(workerDirectory, now = () => new Date().toISOString()) {
@@ -400,7 +509,8 @@ async function run(expectedHash) {
     releaseMutex = await acquireHostMutex(loseMutex);
     const prepared = await prepare(expectedHash);
     safeDirectory(HOST_ROOT, true); safeDirectory(MODEL_ROOT, true);
-    await reconcileStandingState({ signal: controller.signal, normalizeEpochOwnerRecord: prepared.normalizeEpochOwnerRecord });
+    await reconcileStandingState({ signal: controller.signal, normalizeEpochOwnerRecord: prepared.normalizeEpochOwnerRecord,
+      epochRecovery: { authorizationHash: expectedHash, module: await import(pathToFileURL(resolve(BUILD, 'model/rm-0032-standing-epoch-recovery.mjs')).href) } });
     assert.equal(controller.signal.aborted, false);
     worker = makeWorkerIntent(expectedHash); const dir = resolve(HOST_ROOT, worker.workerToken); mkdirSync(dir, { mode: 0o700 });
     writeNew(resolve(dir, 'intent.json'), worker);

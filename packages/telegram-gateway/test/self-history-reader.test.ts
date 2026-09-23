@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Api, utils } from "telegram";
 import bigInt from "big-integer";
+import { BinaryReader } from "telegram/extensions/BinaryReader.js";
+import type { SelfHistoryTaskCheckpoint } from "../src/self-history-reader.js";
 import { createSelfHistoryReader, SelfHistoryReaderError, type SelfHistoryMessage } from "../src/self-history-reader.js";
 
 const accountId = "7890123456", authorId = "4560123456";
@@ -79,7 +81,7 @@ test("exclusions and edits are explicit; undated/deleted entries prevent complet
   const edited = message(20, 200, "edited body", true); edited.editDate = 250;
   edited.replyTo = new Api.MessageReplyHeader({ replyToMsgId: 10, replyToPeerId: new Api.PeerChat({ chatId: bigInt(999) }) });
   const f = fixture([edited, Object.assign(message(19, 190), { media: new Api.MessageMediaPhoto({}) }),
-    Object.assign(message(18, 180), { fwdFrom: new Api.MessageFwdHeader({ date: 100 }) }), message(17, 170, "x".repeat(4097)), new Api.MessageEmpty({ id: 16 }), message(15, 90)]);
+    Object.assign(message(18, 180), { fwdFrom: new Api.MessageFwdHeader({ date: 100 }) }), message(17, 170, "x".repeat(16385)), new Api.MessageEmpty({ id: 16 }), message(15, 90)]);
   const result = await f.reader.read({ fromDate: 100, toDate: 300 });
   assert.equal(result.status, "lower-bound-reached"); assert.equal(result.hasMore, false); assert.equal(result.coverage.traversalComplete, false);
   assert.equal(result.coverage.undatedEntries, 1); assert.equal(result.excluded.nonText, 2); assert.equal(result.excluded.invalidText, 1); assert.equal(result.excluded.unavailable, 1);
@@ -127,4 +129,77 @@ test("date bounds are inclusive and a prior inexact page never becomes a complet
   const first = await g.reader.read({ fromDate: 100, toDate: 300 }); assert.ok(first.cursor);
   const last = await g.reader.read({ fromDate: 100, toDate: 300, cursor: first.cursor! });
   assert.equal(last.status, "empty-page"); assert.equal(last.hasMore, false); assert.equal(last.coverage.traversalComplete, false); g.reader.close();
+});
+
+
+test("durable text reads a month through 100-row wire pages and fresh readers without losing captions or channel senders", async () => {
+  const start = 1700000000, values = Array.from({ length: 1053 }, (_, i) => new Api.Message({
+    id: i + 1, date: start + i * 2000, peerId: peer(), post: true, message: "Post " + i,
+    ...(i % 3 === 0 ? { fwdFrom: new Api.MessageFwdHeader({ date: start }) } : {}),
+    ...(i % 3 === 1 ? { media: new Api.MessageMediaPhoto({ photo: new Api.PhotoEmpty({ id: bigInt(7) }) }), groupedId: bigInt(12) } : {}),
+    ...(i % 3 === 2 ? { replyMarkup: new Api.ReplyInlineMarkup({ rows: [new Api.KeyboardButtonRow({ buttons: [new Api.KeyboardButton({ text: "button" })] })] }) } : {}),
+  }));
+  const calls: number[] = [], collected: number[] = []; let checkpoint: SelfHistoryTaskCheckpoint | undefined;
+  for (let n = 0; n < 15; n++) {
+    const reader = createSelfHistoryReader({ peer: inputPeer(), binding: { accountId, peerId: utils.getPeerId(peer()) }, self: self(),
+      signal: new AbortController().signal, durableText: true, client: { async invoke(request) {
+        assert.ok(request instanceof Api.messages.GetHistory); assert.equal(request.limit, 100); calls.push(request.offsetId);
+        const wire = new Api.messages.Messages({ messages: values.filter(v => !request.offsetId || v.id < request.offsetId).sort((a,b) => b.id-a.id).slice(0, request.limit), users: [], chats: [] });
+        return new BinaryReader(wire.getBytes()).tgReadObject();
+      } } });
+    const result = await reader.readTaskPage({ fromDate: start, toDate: start + 30 * 86400, ...(checkpoint ? { checkpoint } : {}) });
+    reader.close(); checkpoint = result.nextCheckpoint;
+    assert.ok(result.sources.every(row => row.disposition === "included" && row.authorId === utils.getPeerId(peer())));
+    assert.equal(result.page.excluded.nonText, 0); assert.ok(Buffer.byteLength(JSON.stringify(result.page)) <= 65536);
+    collected.push(...result.sources.map(row => row.messageId));
+    if (!result.page.hasMore) { assert.equal(result.page.coverage.traversalComplete, true); break; }
+  }
+  assert.equal(calls.length, 12); assert.equal(collected.length, 1053); assert.equal(new Set(collected).size, 1053);
+  assert.equal(checkpoint?.status, "empty-page");
+});
+
+test("durable full text keeps 16KiB captions and packing resumes at the unconsumed message", async () => {
+  const f = fixture(Array.from({ length: 12 }, (_, i) => message(i + 1, 100, "я".repeat(8192))));
+  const ids: number[] = []; let checkpoint: SelfHistoryTaskCheckpoint | undefined;
+  for (let n = 0; n < 10; n++) {
+    const reader = createSelfHistoryReader({ ...f.options, durableText: true });
+    const result = await reader.readTaskPage({ fromDate: 1, toDate: 200, ...(checkpoint ? { checkpoint } : {}) });
+    reader.close(); checkpoint = result.nextCheckpoint;
+    assert.ok(result.page.messages.every(row => Buffer.byteLength(row.text) === 16384));
+    ids.push(...result.sources.map(row => row.messageId)); if (!result.page.hasMore) break;
+  }
+  assert.equal(ids.length, 12); assert.equal(new Set(ids).size, 12); assert.equal(checkpoint?.status, "empty-page"); f.reader.close();
+});
+
+
+test("direct text history preserves the full Russian message beyond 4096 bytes", async () => {
+ const text="я".repeat(7000)+" КОНЕЦ";const f=fixture([message(1,100,text)]);
+ const page=await f.reader.read({fromDate:1,toDate:200});assert.equal(page.messages[0]?.text,text);assert.equal(page.excluded.invalidText,0);f.reader.close();
+});
+
+
+test("wire-decoded forwarded complaint preserves quoting provenance separately from its forwarding participant", async () => {
+ const forwarded=message(3,100,"My car is delayed");
+ forwarded.fwdFrom=new Api.MessageFwdHeader({date:50,fromName:"Original\u202e customer"});
+ const unknown=message(2,90,"Other quotation");unknown.fwdFrom=new Api.MessageFwdHeader({date:40});
+ const plain=message(1,80,"My own words");
+ const f=fixture([]);f.setOverride(async()=>new BinaryReader(new Api.messages.Messages({messages:[forwarded,unknown,plain],users:[human()],chats:[]}).getBytes()).tgReadObject());
+ const reader=createSelfHistoryReader({...f.options,durableText:true});
+ const result=await reader.readTaskPage({fromDate:1,toDate:200});reader.close();f.reader.close();
+ assert.ok(result.sources.every(source=>source.authorId===authorId));
+ const complaint=result.page.messages.find(row=>row.text==="My car is delayed")!;
+ assert.equal(complaint.displayName,"Саша Иванов");assert.equal(complaint.author,"user");
+ assert.deepEqual(complaint.forwarded,{originalDate:50,sourceName:"Original  customer",interpretation:"quoted-source-not-request"});
+ assert.deepEqual(result.page.messages.find(row=>row.text==="Other quotation")!.forwarded,{originalDate:40,sourceName:null,interpretation:"quoted-source-not-request"});
+ assert.equal(Object.hasOwn(result.page.messages.find(row=>row.text==="My own words")!,"forwarded"),false);
+});
+
+test("durable forward metadata rejects malformed headers and bounds multibyte source labels",async()=>{
+ for(const originalDate of [0,NaN]){
+  const m=message(1,100,"quoted");m.fwdFrom=new Api.MessageFwdHeader({date:originalDate});const f=fixture([m]);
+  const reader=createSelfHistoryReader({...f.options,durableText:true});await assert.rejects(reader.readTaskPage({fromDate:1,toDate:200}),refused("protocol"));reader.close();f.reader.close();
+ }
+ const m=message(1,100,"quoted");m.fwdFrom=new Api.MessageFwdHeader({date:50,postAuthor:"я".repeat(100)});const f=fixture([m]);
+ const reader=createSelfHistoryReader({...f.options,durableText:true}),result=await reader.readTaskPage({fromDate:1,toDate:200});
+ assert.equal(Buffer.byteLength(result.page.messages[0]!.forwarded!.sourceName!),128);reader.close();f.reader.close();
 });

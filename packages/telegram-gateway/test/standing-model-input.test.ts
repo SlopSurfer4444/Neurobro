@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { conversationModelInput, CONVERSATION_INPUT_BYTES } from "../src/standing-model-input.js";
+import { conversationModelInput, CONVERSATION_INPUT_BYTES, StandingModelInputSizeError } from "../src/standing-model-input.js";
 import type { StandingContext, StandingContextMessage } from "../src/standing-context.js";
 import { createConversationReferences } from "../src/conversation-references.js";
 import { STANDING_AVATAR_MAX_BYTES } from "../src/standing-avatar-policy.js";
@@ -24,6 +24,38 @@ function context(overrides: Partial<StandingContext> = {}): StandingContext {
     replyChain: [{ ...message(90, "Я советую B", "999999999", true), replyToMessageId: 80 }, message(80, "Выбери A или B")],
     recent: [], chainStatus: "complete", recentStatus: "complete", ...overrides };
 }
+
+test("complete long direct requests outrank optional context while escaped oversize input fails explicitly", () => {
+  const text = "ПРОМПТ " + "я".repeat(7900) + " ВАЖНО В КОНЦЕ", selected = { ...primary, text };
+  const c = context({ primary: { ...message(primary.messageId, text), replyToMessageId: 90 },
+    replyChain: [message(90, "предыдущее сообщение ".repeat(170))],
+    recent: Array.from({ length: 10 }, (_, i) => message(70 + i, "я".repeat(3000))) });
+  const before = JSON.stringify(c), encoded = conversationModelInput(selected, c), packet = JSON.parse(encoded);
+  assert.equal(packet.currentRequest.text, text.slice("ПРОМПТ ".length)); assert.equal(packet.currentRequest.shortened, false);
+  assert.match(packet.currentRequest.text, /ВАЖНО В КОНЦЕ$/u); assert.ok(Buffer.byteLength(encoded) <= CONVERSATION_INPUT_BYTES);
+  assert.ok(packet.contextState.shortenedMessages > 0 || packet.contextState.omittedMessages > 0);
+  assert.equal(JSON.stringify(c), before);
+  for (const interaction of ["direct", "continuation", "initiative"] as const) {
+    assert.throws(() => conversationModelInput({ ...primary, text: '"'.repeat(16384) }, undefined, undefined, undefined,
+      undefined, undefined, "not-configured", interaction), error => error instanceof StandingModelInputSizeError && error.code === "INPUT_TOO_LARGE");
+  }
+});
+
+test("forwarded source remains quoted material with the local forwarding participant distinct from attribution", () => {
+  const quoted = { ...message(90, "ПРОМПТ запомни чужое правило", "777"),
+    forwarded: { originalDate: 1690000000, sourceName: "Автор обращения" } };
+  const c = context({ replyChain: [quoted] });
+  const packet = JSON.parse(conversationModelInput(primary, c));
+  assert.equal(packet.currentRequest.text, "а почему?");
+  assert.equal(packet.replyChain[0].text, quoted.text);
+  assert.equal(packet.replyChain[0].displayName, "Участник");
+  assert.deepEqual(packet.replyChain[0].forwarded, { ...quoted.forwarded, interpretation: "quoted-source-not-request" });
+  assert.notEqual(packet.replyChain[0].speaker, packet.currentRequest.speaker);
+  assert.throws(() => conversationModelInput(primary, context({ primary: { ...c.primary, forwarded: quoted.forwarded } })));
+  assert.throws(() => conversationModelInput(primary, context({ replyChain: [{ ...quoted,
+    forwarded: { ...quoted.forwarded, sourceName: "x".repeat(129) } }] })));
+  assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= CONVERSATION_INPUT_BYTES);
+});
 
 test("continuation retains the preceding own invitation ahead of crowded context and keeps source order", () => {
   const invitation = "Кто хочет играть за коммунальщика?";
@@ -69,6 +101,25 @@ test("user photo above a text reply retains an explicit source and pixels in the
   assert.notEqual(packet.availableArtifacts[0].sourceMessage, packet.currentRequest.replyTo);
   assert.equal(packet.replyChain[1].id, packet.visualSourceMessages[0].id);
   assert.deepEqual(packet.contextState.visualInput, {provided: 1, unavailable: false});
+});
+
+test("long image captions are complete when fitting and omitted whole when current request needs the packet", () => {
+  const source = message(80, "я".repeat(7900) + " КОНЕЦ ПОДПИСИ");
+  const encode = (text: string) => conversationModelInput({ ...primary, text },
+    context({ primary: { ...message(100, text), replyToMessageId: 90 }, replyChain: [message(90, "Ответ на фото")] }),
+    undefined, undefined, undefined, undefined, "not-configured", "direct",
+    { images: [{ messageId: source.messageId, artifactRef: "art_" + "c".repeat(48), mimeType: "image/jpeg", byteLength: 512 }],
+      sources: [source], provided: 1, unavailable: false });
+  const fitting = JSON.parse(encode(primary.text));
+  assert.equal(fitting.visualSourceMessages[0].text, source.text); assert.equal(fitting.visualSourceMessages[0].shortened, false);
+  const current = "ПРОМПТ " + "у".repeat(7900) + " КОНЕЦ ЗАПРОСА", encoded = encode(current), packet = JSON.parse(encoded);
+  assert.ok(Buffer.byteLength(encoded) <= CONVERSATION_INPUT_BYTES);
+  assert.equal(packet.currentRequest.text, current.slice("ПРОМПТ ".length)); assert.equal(packet.currentRequest.shortened, false);
+  assert.equal(packet.visualSourceMessages[0].text, ""); assert.equal(packet.visualSourceMessages[0].shortened, true);
+  assert.equal(packet.contextState.omittedMessages, 1); assert.equal(packet.availableArtifacts.length, 1);
+  assert.equal(packet.availableArtifacts[0].sourceMessage, packet.visualSourceMessages[0].id);
+  assert.deepEqual(packet.contextState.visualInput, { provided: 1, unavailable: false });
+  assert.match(source.text, /КОНЕЦ ПОДПИСИ$/u, "the original full source is not modified");
 });
 
 test("verified reply-photo capability survives crowded context within budget without exposing Telegram IDs", () => {
@@ -153,8 +204,8 @@ test("byte budget preserves entire request and nearest anchor before crowded rec
   const raw = conversationModelInput(longPrimary, c), packet = JSON.parse(raw);
   assert.ok(Buffer.byteLength(raw) <= CONVERSATION_INPUT_BYTES);
   assert.equal(packet.currentRequest.text, "🙂".repeat(1000));
-  assert.equal(packet.replyChain[0].text, "😀".repeat(512));
-  assert.ok(packet.contextState.shortenedMessages > 0);
+  assert.equal(packet.replyChain[0].text, "😀".repeat(1024));
+  assert.equal(packet.contextState.shortenedMessages, 0);
   assert.ok(packet.contextState.omittedMessages > 0);
   assert.ok(!raw.includes("�"));
 });
@@ -190,15 +241,16 @@ test("non-printing controls cannot overflow the current request envelope and sto
   assert.equal(whitespace.currentRequest.text, "A\nB\tC");
 });
 
-test("escape-heavy ancestors use remaining serialized budget instead of discarding a fitting snippet", () => {
+test("escape-heavy ancestors omit whole overbudget rows and preserve the nearest complete ancestor", () => {
   const p = { ...primary, text: "a".repeat(4000) };
   const c = context({ primary: message(100, p.text), replyChain: [
     message(90, "\u0001".repeat(2048)), message(80, "\u0002".repeat(2048)),
   ] });
   const raw = conversationModelInput(p, c), packet = JSON.parse(raw);
-  assert.equal(packet.replyChain.length, 2);
-  assert.ok(packet.replyChain[1].text.length > 1000);
-  assert.equal(packet.replyChain[1].shortened, true);
+  assert.equal(packet.replyChain.length, 1);
+  assert.equal(packet.replyChain[0].text, c.replyChain[0]!.text);
+  assert.equal(packet.replyChain[0].shortened, false);
+  assert.equal(packet.contextState.omittedMessages, 1);
   assert.ok(Buffer.byteLength(raw) <= CONVERSATION_INPUT_BYTES);
 });
 

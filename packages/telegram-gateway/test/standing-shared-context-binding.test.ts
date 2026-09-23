@@ -76,11 +76,11 @@ test("whole shared evidence and current request survive escape-heavy unrelated t
     assert.deepEqual(packet.contextState.shared.snapshot, snapshot);
     assert.ok(packet.contextState.omittedMessages > 0 || packet.contextState.shortenedMessages > 0);
     const crowdedChain = { ...context, recent: [], replyChain: Array.from({ length: 8 }, (_, i) =>
-      message(90 - i, "\u0001".repeat(2048))) };
+      message(90 - i, "\u0001".repeat(3600))) };
     const baseline = JSON.parse(conversationModelInput(primary, crowdedChain, references, undefined, undefined, undefined, "bounded-checkpoint"));
     const withSharedRaw = conversationModelInput(primary, crowdedChain, references, undefined, undefined, bound, "bounded-checkpoint");
     const withShared = JSON.parse(withSharedRaw);
-    assert.deepEqual(withShared.replyChain.slice(0, -1), baseline.replyChain.slice(0, -1), "background memory must not evict directly replied-to context");
+    assert.deepEqual(withShared.replyChain, baseline.replyChain, "background memory must not evict directly replied-to context");
     assert.equal(withShared.replyChain.length, baseline.replyChain.length);
     assert.deepEqual(withShared.contextState.shared, { status: "omitted", reason: "input-budget" });
     assert.equal(withShared.contextState.memory.ownActionRecovery, "bounded-checkpoint", "available recovery does not imply included memory");

@@ -21,6 +21,15 @@ test("noncreating reads distinguish absent from unavailable parent and never wri
   assert.deepEqual(await read({ ...f.args, directory: join(f.root, "missing") }), { storage: "unavailable" });
   assert.deepEqual((await readdir(f.root)).sort(), ["dispositions"]);
 });
+
+test("missing final report remains an exact-head task-local reason after reopen", async t => {
+  const f = await fixture(t);
+  await record({ ...f.args, reason: "report-required" });
+  const saved = await read(f.args);
+  assert.equal(saved.storage, "ready");
+  if (saved.storage === "ready") assert.equal(saved.disposition.reason, "report-required");
+  assert.deepEqual(await read({ ...f.args, analysisHead: "3".repeat(64) }), { storage: "absent" });
+});
 test("encrypted immutable reason survives reopen; identical retry preserves exact bytes and differing reason conflicts", async t => {
   const f = await fixture(t), written = await record({ ...f.args, reason: "coverage" });
   assert.equal(written.storage, "ready"); assert.equal(written.disposition.reason, "coverage"); assert.ok(Object.isFrozen(written.disposition));

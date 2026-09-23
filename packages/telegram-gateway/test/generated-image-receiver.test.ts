@@ -133,7 +133,7 @@ test("exact maximum image uses 22 bounded chunks and validates after assembly", 
 test("actual Python collector chunks flow through receiver and media outbox", async () => {
   // Fixed public source-only helper: no WSL, credentials, model, Telegram or files written.
   const python = globalThis.process.env.NEUROBRO_TEST_PYTHON ?? "python";
-  const collector = resolve("../../project/verification/rm-0032-native-image-collector.py");
+  const collector = resolve(globalThis.process.cwd(), "..", "..", "project", "verification", "rm-0032-native-image-collector.py");
   const code = `import base64, importlib.util, json, sys
 spec=importlib.util.spec_from_file_location('collector',sys.argv[1])
 m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)

@@ -1,14 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough, Writable, Duplex } from "node:stream";
-import { createEpochWire, EpochWireError, EpochWireTimeout, EPOCH_FRAME_BYTES, EPOCH_TOTAL_BYTES } from "../src/standing-epoch-wire.js";
+import { createEpochWire, EpochWireError, EpochWireTimeout, EPOCH_FRAME_BYTES, EPOCH_TOTAL_BYTES, EPOCH_VISUAL_FRAME_BYTES, getStandingMultiplexVisualFrameLimit } from "../src/standing-epoch-wire.js";
+import { snapshotStandingVisualInputs, STANDING_VISUAL_BYTES } from "../src/standing-visual-input.js";
 
 const row = (v: unknown) => Buffer.from(JSON.stringify(v)+"\n");
 const tick = () => new Promise<void>(resolve=>setImmediate(resolve));
-function fixture() {
+function fixture(multiplexVisualInputs?:true) {
   const readable = new PassThrough(), writable = new PassThrough(), faults: Error[] = [];
   readable.on("error",()=>{}); writable.on("error",()=>{});
-  const wire = createEpochWire({readable,writable,onFault:e=>faults.push(e)});
+  const wire = createEpochWire({readable,writable,onFault:e=>faults.push(e),...(multiplexVisualInputs?{multiplexVisualInputs}:{})});
   return {wire,readable,writable,faults,close(){wire.close();readable.destroy();writable.destroy();}};
 }
 test("fragmented multibyte UTF8 and many coalesced frames remain ordered",async()=>{
@@ -105,7 +106,7 @@ test("exact maximum frame passes and one byte larger faults before parsing",asyn
   }
 });
 test("queue frame count and byte budget refuse overflow even with coalesced read",async()=>{
-  for(const bytes of [Buffer.concat(Array.from({length:33},()=>row({x:1}))),Buffer.concat(Array.from({length:5},()=>row({s:"a".repeat(700000)})))]){
+  for(const bytes of [Buffer.concat(Array.from({length:33},()=>row({x:1}))),Buffer.concat(Array.from({length:5},()=>row({s:"a".repeat(EPOCH_FRAME_BYTES-100)})))]){
     const f=fixture();f.readable.write(bytes);
     await assert.rejects(f.wire.receive(100),e=>e instanceof EpochWireError&&e.code==="bounds");assert.equal(f.faults.length,1);f.close();
   }
@@ -204,4 +205,67 @@ test("large visual admission is outbound only and leaves ordinary bounds intact"
  for(const frame of [{kind:"toolResult",images:"A".repeat(EPOCH_FRAME_BYTES)}, {kind:"turn",conversation:"A".repeat(EPOCH_FRAME_BYTES)}]){
    const f=fixture();try{await assert.rejects(f.wire.send(frame,1000),EpochWireError);}finally{f.close();}
  }
+});
+
+const multiplexVisual = (images:unknown = [{mimeType:"image/png",base64:Buffer.alloc(EPOCH_FRAME_BYTES).toString("base64")}]) =>
+  ({workerId:"foreground",frame:{kind:"turn",purpose:"conversation",requestRef:"question-1",input:"Describe",images}});
+
+test("explicit multiplex visuals carry the exact producer maximum without expanding legacy defaults",async()=>{
+  const pixel=()=>{const bytes=Buffer.alloc(STANDING_VISUAL_BYTES/2);Buffer.from([137,80,78,71,13,10,26,10]).copy(bytes);return bytes;};
+  const visuals=snapshotStandingVisualInputs([{mimeType:"image/png",bytes:pixel()},{mimeType:"image/png",bytes:pixel()}]);
+  const value=multiplexVisual(visuals);value.frame.input="x".repeat(24576);
+  assert.equal(getStandingMultiplexVisualFrameLimit(value),EPOCH_VISUAL_FRAME_BYTES);
+  const disabled=fixture();try{await assert.rejects(disabled.wire.send(value,1000),e=>e instanceof EpochWireError&&e.code==="bounds");}finally{disabled.close();}
+  const enabled=fixture(true);try{
+    const chunks:Buffer[]=[];enabled.writable.on("data",(chunk:Buffer)=>chunks.push(chunk));await enabled.wire.send(value,10000);
+    assert.deepEqual(Buffer.concat(chunks),row(value));assert.equal(enabled.faults.length,0);
+  }finally{enabled.close();}
+});
+
+test("multiplex visual gate accepts only exact conversation envelopes and original limits",async()=>{
+  const image={mimeType:"image/png",base64:Buffer.alloc(EPOCH_FRAME_BYTES).toString("base64")};
+  const cases:unknown[]=[
+    {...multiplexVisual(),work:{taskRef:"t",planRef:"p",workRef:"w"}},
+    {...multiplexVisual(),workerId:"bad\n"},
+    {...multiplexVisual(),extra:true},
+    {workerId:"foreground",frame:{...multiplexVisual().frame,purpose:"history-analysis"}},
+    {workerId:"foreground",frame:{...multiplexVisual().frame,extra:"x"}},
+    {workerId:"foreground",frame:{...multiplexVisual().frame,input:"x".repeat(24577)}},
+    {workerId:"foreground",frame:{...multiplexVisual().frame,requestRef:"bad\n"}},
+    multiplexVisual([]),multiplexVisual([image,image,image]),
+    multiplexVisual([{...image,base64:"AA==\n"}]),multiplexVisual([{...image,base64:"AB=="}]),
+    multiplexVisual([{...image,mimeType:"image/gif"}]),multiplexVisual([{...image,extra:true}]),
+    multiplexVisual([{...image,base64:Buffer.alloc(STANDING_VISUAL_BYTES+1).toString("base64")}]),
+    multiplexVisual([{...image,base64:Buffer.alloc(STANDING_VISUAL_BYTES).toString("base64")},image]),
+  ];
+  const f=fixture(true);try{let writes=0;f.writable.on("data",()=>writes++);
+    for(const value of cases)await assert.rejects(f.wire.send(value,1000),EpochWireError);
+    assert.equal(writes,0);assert.equal(f.faults.length,0);await f.wire.send({kind:"close"},1000);assert.equal(writes,1);
+  }finally{f.close();}
+});
+
+test("multiplex visual recognition never invokes proxy traps or accessors",async()=>{
+  let touched=0;
+  const proxy=(value:object)=>new Proxy(value,{get(){touched++;throw Error("unsafe");},getPrototypeOf(){touched++;throw Error("unsafe");},ownKeys(){touched++;throw Error("unsafe");}});
+  const getter=(key:string)=>Object.defineProperty({},key,{enumerable:true,get(){touched++;throw Error("unsafe");}});
+  const image={mimeType:"image/png",base64:"AA=="};
+  const badArray=[image];Object.defineProperty(badArray,"0",{enumerable:true,get(){touched++;throw Error("unsafe");}});
+  const cases=[proxy(multiplexVisual()),{workerId:"foreground",frame:proxy(multiplexVisual().frame)},
+    Object.assign(getter("frame"),{workerId:"foreground"}),{workerId:"foreground",frame:Object.assign(getter("images"),{kind:"turn"})},
+    multiplexVisual(proxy([image])),multiplexVisual(badArray),multiplexVisual([getter("base64")]),multiplexVisual([proxy(image)]),
+    multiplexVisual(Object.assign([image],{extra:true})),multiplexVisual([Object.create(image)]),
+    {workerId:"foreground",frame:Object.defineProperty({...multiplexVisual().frame},"input",{get(){touched++;throw Error("unsafe");}})}];
+  const f=fixture(true);try{for(const value of cases)await assert.rejects(f.wire.send(value,1000),EpochWireError);assert.equal(touched,0);}finally{f.close();}
+});
+
+test("multiplex option never expands ordinary nested output or inbound frames",async()=>{
+  const big="A".repeat(EPOCH_FRAME_BYTES),ordinary=[
+    {workerId:"foreground",frame:{kind:"toolResult",images:big}},
+    {workerId:"foreground",frame:{kind:"turn",purpose:"conversation",input:big}},
+    {workerId:"foreground",nested:{frame:multiplexVisual().frame}},
+    {workerId:"foreground",frame:{kind:"other",payload:multiplexVisual().frame}},
+  ];
+  const f=fixture(true);try{for(const value of ordinary)await assert.rejects(f.wire.send(value,1000),e=>e instanceof EpochWireError&&e.code==="bounds");
+    const pending=f.wire.receive(1000);f.readable.write(row(multiplexVisual()));await assert.rejects(pending,e=>e instanceof EpochWireError&&e.code==="bounds");
+  }finally{f.close();}
 });

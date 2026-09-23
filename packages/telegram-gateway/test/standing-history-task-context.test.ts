@@ -31,7 +31,34 @@ function fixture() {
     discovery: { async find() { return page([intent()]); } }, manager: { async status(value) { return status(value.taskRef); } } };
   return { references, controller, input };
 }
+
+test("community task source survives recall without exposing the source peer", async () => {
+  const f=fixture(),source={kind:"observed-source" as const,sourceRef:"community" as const,workspaceId:"test-team",peerId:"-100987654321"};
+  try {
+    const task={...intent(),source};
+    const result=await readStandingHistoryTaskContext({...f.input,
+      discovery:{async find(){return page([task]);}},
+      manager:{async status(value){return {...status(value.taskRef),source:"community" as const};}}});
+    assert.equal(result.source.items[0]?.description?.source,"community");
+    assert.ok(!JSON.stringify(result).includes(source.peerId));
+    assert.ok(!JSON.stringify(result).includes(source.workspaceId));
+  } finally {f.references.close();}
+});
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+test("long Russian primary works in loaded and passive task memory without losing exact binding", async () => {
+  const f = fixture(), selected = { ...primary, text: "я".repeat(4095) + " конец" };
+  const projection = createStandingHistoryTaskContextProjection({ binding, references: f.references, scopeRef, signal: f.controller.signal });
+  try {
+    const loaded = await readStandingHistoryTaskContext({ ...f.input, primary: selected });
+    assert.equal(loaded.source.items.length, 1);
+    assert.equal(requireStandingHistoryTaskContext(loaded, selected, f.references), loaded);
+    const observed = projection.capture({ intent: intent(), status: status(id(1)), observedAt: asOf });
+    const passive = projection.issue({ primary: selected, asOf, observations: [observed] });
+    assert.equal(passive.source.items.length, 1);
+    assert.equal(requireStandingHistoryTaskContext(passive, selected, f.references), passive);
+    assert.throws(() => requireStandingHistoryTaskContext(passive, { ...selected, text: selected.text.slice(0, 2048) }, f.references));
+  } finally { projection.close(); f.references.close(); }
+});
 test("real encrypted task creation survives manager/discovery reopen and actor-only bounded traversal", async () => {
   const root = await mkdtemp(join(tmpdir(), "neurobro-task-context-"));
   const directories = { control: join(root, "control"), pages: join(root, "pages"), analysis: join(root, "analysis") };

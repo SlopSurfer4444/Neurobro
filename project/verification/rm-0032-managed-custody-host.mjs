@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(DIRECTORY, '../..');
-const ATTEMPT = 'C:/Neurobro/scratch/managed-custody-20260910-v2';
+const ATTEMPT = 'C:/Neurobro/attempts';
 const WSL = 'C:/Program Files/WSL/wsl.exe';
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 

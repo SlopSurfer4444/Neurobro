@@ -1,3 +1,4 @@
+import { STANDING_INCOMING_TEXT_BYTES } from "./standing-context.js";
 import { types } from "node:util";
 import { Api, utils } from "telegram";
 import bigInt from "big-integer";
@@ -70,7 +71,7 @@ export function createBoundPollTelegramTransport(input:{client:PilotInvoker;bind
   let peer:Api.InputPeerChat|Api.InputPeerChannel;
   try{
     if(!positiveLong(binding.accountId)||!/^-[1-9]\d{0,19}$/.test(binding.peerId)||!(input.self instanceof Api.User)||!input.self.self||input.self.deleted||input.self.bot||input.self.id.toString()!==binding.accountId||
-      selected.chatId!==binding.peerId||!positiveLong(selected.ownerId)||selected.ownerId===binding.accountId||!msgId(selected.messageId)||typeof selected.text!=="string"||!selected.text.trim()||Buffer.byteLength(selected.text)>4096||selected.text.includes("\0")||Buffer.from(selected.text).toString()!==selected.text||
+      selected.chatId!==binding.peerId||!positiveLong(selected.ownerId)||selected.ownerId===binding.accountId||!msgId(selected.messageId)||typeof selected.text!=="string"||!selected.text.trim()||Buffer.byteLength(selected.text)>STANDING_INCOMING_TEXT_BYTES||selected.text.includes("\0")||Buffer.from(selected.text).toString()!==selected.text||
       !(input.peer instanceof Api.InputPeerChat||input.peer instanceof Api.InputPeerChannel)||!samePeer(input.peer,binding.peerId)||!(signal instanceof AbortSignal))return fail("config");
     peer=input.peer instanceof Api.InputPeerChat?new Api.InputPeerChat({chatId:bigInt(input.peer.chatId.toString())}):new Api.InputPeerChannel({channelId:bigInt(input.peer.channelId.toString()),accessHash:bigInt(input.peer.accessHash.toString())});
     if(peer instanceof Api.InputPeerChannel&&(peer.accessHash.isZero()||peer.accessHash.lesser((-(2n**63n)).toString())||peer.accessHash.greaterOrEquals((2n**63n).toString())))return fail("config");

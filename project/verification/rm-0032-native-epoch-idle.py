@@ -236,7 +236,7 @@ class EpochIdleValidator:
 
 
 class ScopedEpochIdleRegistry:
-    """Two private bindings, one reader; inactive requests NEVER execute.
+    """Two private bindings (three in explicit v2), one reader; no idle calls.
 
     Active frames are returned to their engine unchanged. Only exact legacy
     idle notifications may be consumed for a known inactive thread. Aggregate
@@ -244,8 +244,12 @@ class ScopedEpochIdleRegistry:
     """
     PURPOSES = ("conversation", "history-analysis")
 
-    def __init__(self, *, idle_sentinel, clock=None):
+    def __init__(self, *, idle_sentinel, clock=None, protocol="standing-scoped-epoch-v1"):
         import time
+        if type(protocol) is not str or protocol not in ("standing-scoped-epoch-v1", "standing-scoped-epoch-v2"):
+            raise IdleError("CONFIG_REFUSED", "scope")
+        self.protocol = protocol
+        self.PURPOSES = type(self).PURPOSES + (("community-assessment",) if protocol == "standing-scoped-epoch-v2" else ())
         self.clock = clock or time.monotonic
         self._idle = idle_sentinel
         self._threads, self._validators = {}, {}

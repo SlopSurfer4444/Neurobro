@@ -118,7 +118,7 @@ async function deliveryFixture(t: TestContext) {
     // Nodes/observed model alone never imply a delivered final message.
     assert.deepEqual((await manager.status(actor(initial.taskRef))).delivery, { state: "not-attempted", consumed: false });
     let sent: PilotSend | undefined;
-    const deliverNext = () => runStandingHistoryTaskDelivery({ intent, directories, passphrase: args.passphrase, readiness, signal: new AbortController().signal,
+    const deliverNext = () => runStandingHistoryTaskDelivery({ intent, directories, passphrase: args.passphrase, readiness, finalReport: { schema: "standing-history-final-report-v1", taskRef: intent.taskId, sourceHead: readiness.sourceHead, analysisHead: readiness.expectedHead, body: "r".repeat(summary.length) }, signal: new AbortController().signal,
       async verifyOwnerReady(value) { assert.deepEqual(value, nativeBinding); return { schema: "standing-analysis-owner-ready-v1", nativeBinding: value, basis: "persisted-owner-settlement", modelOutcome: "not-proven" }; },
       ticket: { openTaskReply() { return { transport: { async sendOnce(value) { sent = value; if (mode === "unknown") throw Error("synthetic outcome lost"); return { messageId: 2001 }; },
         async readExact(chatId, messageId) { assert.ok(sent); return { chatId, messageId, accountId: intent.accountId, replyToMessageId: sent.replyToMessageId, text: sent.text }; } }, async close() {} }; } } });

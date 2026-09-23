@@ -1,4 +1,5 @@
 import test from "node:test";
+import { StandingHistoryTaskRunnerError } from "../src/standing-history-task-runner.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createStandingInvokeOwner } from "../src/standing-service.js";
@@ -14,7 +15,7 @@ import type { StandingEpochConnection } from "../src/standing-service.js";
 import type { EpochExtraTool, EpochToolResult } from "../src/standing-tool-dispatcher.js";
 import { STANDING_ARTIFACT_TOOL_SPECS } from "../src/standing-artifact-tools.js";
 import { runPilotReply, createEncryptedPilotStore, type PilotSend } from "../src/pilot-outbox.js";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openStandingState } from "../src/standing-state.js";
@@ -22,8 +23,11 @@ import { runStandingWithPorts, STANDING_DEFERRED_REPLY, addressedModelText, with
 import type { DialogueOutcome, DialogueQuestion } from "../src/standing-dialogue-journal.js";
 import { Api, utils } from "telegram";
 import { BinaryReader } from "telegram/extensions/BinaryReader.js";
+import { normalizeStandingWorkspace } from "../src/standing-workspace.js";
 import bigInt from "big-integer";
 import { createBoundActionTransportLease } from "../src/bound-action-transport.js";
+import { projectStandingObservedSourcePage } from "../src/standing-observed-source-reader.js";
+import { createStandingChatSearchLease, STANDING_CHAT_SEARCH_TOOL_SPEC } from "../src/standing-chat-search.js";
 
 test("encrypted cursor resumes exact binding and never moves backwards", async () => {
   const root = await mkdtemp(join(tmpdir(), "standing-state-"));
@@ -42,7 +46,7 @@ test("encrypted cursor resumes exact binding and never moves backwards", async (
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-function fixture(options: { unknownFirst?: boolean; modelBlocked?: boolean; teardownFails?: boolean; checkpointFails?: boolean; stopAfterModel?: boolean } = {}) {
+function fixture(options: { unknownFirst?: boolean; modelBlocked?: boolean; teardownFails?: boolean; checkpointFails?: boolean; stopAfterModel?: boolean; firstText?: string } = {}) {
   const abort = new AbortController(), events: string[] = [];
   const questions: DialogueQuestion[] = [], outcomes: DialogueOutcome[] = [];
   let cursor = 0, yielded = 0, blocked = false, models = 0, clients = 0;
@@ -81,7 +85,7 @@ function fixture(options: { unknownFirst?: boolean; modelBlocked?: boolean; tear
       async next() {
         if (yielded >= 2) { abort.abort(); throw new Error("aborted"); }
         const id = ++yielded;
-        const primary = { chatId: "-200", ownerId: "300", messageId: id, text: `ПРОМПТ ${id}` };
+        const primary = { chatId: "-200", ownerId: "300", messageId: id, text: id === 1 && options.firstText !== undefined ? options.firstText : `ПРОМПТ ${id}` };
         await arg.checkpointQuestion(primary); await arg.checkpointCursor(id);
         return { primary, transport: {}, cursor: id };
       }, close() { events.push("close-adapter"); },
@@ -94,6 +98,22 @@ function fixture(options: { unknownFirst?: boolean; modelBlocked?: boolean; tear
   return { input, ports, events, credentials, questions, outcomes, abort, counters: () => ({ clients, models }) };
 }
 
+test("wait throw retains only bounded origin and code through actual service and host projection", async () => {
+  const hostModule = new URL("../../../../project/verification/rm-0032-standing-host.mjs", import.meta.url).href;
+  const { normalizeStandingResult } = await import(hostModule);
+  for (const childCode of ["settlement_unknown", "STATE", "ANALYSIS_ADMISSION", "PRIVATE /path/token"]) {
+    const f = fixture();
+    f.ports.adapter = async () => ({ async next() { throw new StandingHistoryTaskRunnerError("step", "participant-step", childCode); }, close() {} }) as never;
+    const result = await runStandingWithPorts(f.input, f.ports);
+    assert.equal(result.failureStage, "wait"); assert.equal(result.failureCode, "other");
+    const projected = normalizeStandingResult(result);
+    assert.equal(projected.waitFailureOrigin, "participant-step");
+    assert.equal(projected.waitFailureCode, childCode.startsWith("PRIVATE") ? undefined : childCode.toLowerCase());
+    assert.equal(JSON.stringify(projected).includes("PRIVATE"), false);
+    assert.equal(result.clientSettled, true);
+  }
+});
+
 test("two consecutive replies use consumed cursors, one client and distinct outboxes", async () => {
   const f = fixture(); const result = await runStandingWithPorts(f.input, f.ports);
   assert.equal(result.status, "stopped"); assert.equal(result.verifiedReplies, 2); assert.equal(result.lockPreserved, false);
@@ -105,6 +125,47 @@ test("two consecutive replies use consumed cursors, one client and distinct outb
   assert.ok(f.events.indexOf("settle-client") < f.events.indexOf("release-lock"));
   assert.deepEqual(f.credentials, { apiId: 0, apiHash: "", passphrase: "" });
 });
+
+for (const mode of ["initiative", "continuation"] as const) for (const media of [false, true]) {
+  test(`expired ${mode} ${media ? "image" : "text"} is consumed silently and the next direct request still runs`, async () => {
+    for (const expireAfterCleanup of [false, true]) {
+      const f = warmFixture(media ? images() : fixture());
+      let turns = 0;
+      f.connection.turn = async requestRef => {
+        const id = ++turns; f.events.push(`completed-turn-${id}`);
+        if (!media) return { kind: "text", answer: "A useful response" };
+        const origin = { requestRef, threadId: "thread", turnId: `turn-${id}`, itemId: `image-${id}` };
+        const registry = createGeneratedImageRegistry({ requestRef, threadId: origin.threadId, turnId: origin.turnId });
+        const artifact = registry.acceptCompleted(origin, { id: origin.itemId, type: "imageGeneration", status: "completed", result: IMAGE_PNG });
+        return { kind: "image", answer: "Generated image", image: { artifact,
+          registry: { get: registry.get, copyBytes: registry.copyBytes },
+          close() { f.events.push(`close-image-${id}`); registry.close(); } } };
+      };
+      f.input = { ...f.input, enableInitiative: true };
+      const adapter = f.ports.adapter;
+      let checks = 0;
+      f.ports.adapter = async arg => {
+        const original = await adapter(arg);
+        return { ...original, async next(signal) {
+          const selected = await original.next(signal);
+          if (selected.primary.messageId !== 1) return selected;
+          return { ...selected, [mode]: true as const,
+            isParticipationCurrent: () => { checks++; return expireAfterCleanup && checks === 1; },
+            async finishInitiative() { f.events.push("expired-participation-finished"); } };
+        } };
+      };
+      const result = await runStandingWithPorts(f.input, f.ports);
+      assert.equal(result.status, "stopped", JSON.stringify({ result, events: f.events })); assert.equal(result.lockPreserved, false);
+      assert.equal(result.verifiedReplies, 1); assert.equal(f.counters().clients, 1); assert.equal(turns, 2);
+      assert.equal(f.outcomes[0]!.delivery, "not-sent"); assert.equal(f.outcomes[0]!.answer, null);
+      assert.ok(!f.events.includes("fixture/outbox-1")); assert.ok(!f.events.includes("send-1"));
+      assert.ok(!f.events.includes("image-store-1")); assert.ok(!f.events.includes("image-send-1"));
+      assert.ok(f.events.includes(media ? "image-send-2" : "send-2"));
+      assert.ok(f.events.indexOf("expired-participation-finished") < f.events.indexOf("completed-turn-2"));
+      if (media) { assert.ok(f.events.includes("close-image-1")); assert.deepEqual(f.outcomes[0]!.image, { generation: "completed" }); }
+    }
+  });
+}
 
 function warmFixture(f = fixture(), rotate = false) {
   const originalAdapter = f.ports.adapter, originalJournal = f.ports.journal;
@@ -149,6 +210,192 @@ function warmFixture(f = fixture(), rotate = false) {
   } };
   return { ...f, connection, history, packets, releases, refs: () => refs!, journalReads: () => journalReads };
 }
+
+test("oversized continuation is consumed silently without an unsolicited failure notice", async () => {
+  const f = warmFixture(fixture({ firstText: 'ПРОМПТ ' + '"'.repeat(13000) }));
+  const adapter = f.ports.adapter;
+  let finished = 0;
+  f.ports.adapter = async arg => {
+    const original = await adapter(arg);
+    return { ...original, async next(signal) {
+      const selected = await original.next(signal);
+      return selected.primary.messageId === 1 ? { ...selected, continuation: true as const,
+        isParticipationCurrent: () => false, async finishInitiative() { finished++; } } : selected;
+    } };
+  };
+  const result = await runStandingWithPorts(f.input, f.ports);
+  assert.equal(result.status, "stopped"); assert.equal(result.verifiedReplies, 1);
+  assert.equal(finished, 1); assert.equal(f.packets.length, 1);
+  assert.equal(f.outcomes[0]!.delivery, "not-sent"); assert.equal(f.outcomes[0]!.answer, null);
+  assert.ok(!f.events.includes("send-1")); assert.ok(f.events.includes("send-2"));
+});
+
+async function learningFixture(root: string) {
+  const f = warmFixture(), accountCustodyRoot = join(root, "account"), appRoot = join(root, "team");
+  const config = { workspaceId: "community-team", target: { accountId: "100", peerId: "-200", title: "Synthetic work team" },
+    accountCustodyRoot, appRoot, authConfigPath: join(accountCustodyRoot, "auth.json"), bindingPath: join(appRoot, "binding.json"),
+    modelReceiptPath: join(appRoot, "model.json"), attemptDirectory: join(appRoot, "attempt"), killSwitchPath: join(appRoot, "STOP"),
+    stateDirectory: join(appRoot, "state") };
+  const workspace = normalizeStandingWorkspace(config);
+  await mkdir(workspace.stateDirectory, { recursive: true, mode: 0o700 });
+  let tools: readonly EpochExtraTool[] = [];
+  f.input = { ...f.input, paths: workspace.paths, stateDirectory: workspace.stateDirectory, workspace: config, workProfile: "team-assistant",
+    openConversation(input) {
+      assert.equal(input.workProfile, "team-assistant");
+      tools = input.extraTools!;
+      assert.deepEqual(tools.map(tool => tool.name), [STANDING_CHAT_SEARCH_TOOL_SPEC.name, "neurobro_memory", "neurobro_community", "neurobro_observation"]);
+      return f.connection;
+    } };
+  return { ...f, tools: () => tools };
+}
+
+test("oversized encoded request gets one guarded explanation and the next request still answers",async()=>{
+  const f=warmFixture(fixture({firstText:'ПРОМПТ '+ '"'.repeat(13000)}));
+  const result=await runStandingWithPorts(f.input,f.ports);
+  assert.equal(result.status,"stopped");assert.equal(result.verifiedReplies,2);
+  assert.equal(f.packets.length,1);assert.equal(f.packets[0]!.currentRequest.text,"2");
+  assert.equal(f.releases.length,1,"no release for encoder refusal before model turn");
+  assert.match(f.outcomes[0]!.answer??"",/Текст не обрезал/);
+  assert.equal(f.outcomes[0]!.kind,"deferred");assert.equal(f.outcomes[0]!.delivery,"verified");
+  assert.equal(f.counters().clients,1);assert.equal(result.lockPreserved,false);
+});
+
+test("community reads retain internal delivery and durable source pin across service reopen", async () => {
+  const root = await mkdtemp(join(tmpdir(), "neurobro-source-service-"));
+  try {
+    for (const reopening of [false, true]) {
+      const f = await learningFixture(root), originalAdapter = f.ports.adapter, originalDispatch = f.ports.dispatch;
+      f.input = { ...f.input, observedSource: { title: "Synthetic source" } };
+      let liveLeases = 0, reads = 0;
+      f.ports.adapter = async args => {
+        assert.equal(args.observedSource?.title, "Synthetic source");
+        assert.equal(args.observedSource?.expectedPeerId, reopening ? "-900" : undefined);
+        await args.observedSource!.onResolved!({ accountId: "100", peerId: "-900", title: "Synthetic source" });
+        const adapter = await originalAdapter(args);
+        return { ...adapter, async next(signal) {
+          const selected = await adapter.next(signal);
+          return { ...selected, openObservedSource() {
+            liveLeases++; let closed = false;
+            return { info: { sourceRef: "community" as const, title: "Synthetic source", readOnly: true as const,
+              telegramSendRestriction: "confirmed-denied" as const },
+              async readHistory(input) {
+                reads++; assert.equal(closed, false);
+                return projectStandingObservedSourcePage(new Api.messages.Messages({ chats: [], users: [], messages: [
+                  new Api.Message({ id: 50, peerId: new Api.PeerChat({ chatId: bigInt(900) }), date: 1700000000, message: "Source complaint" })
+                ] }), { sourceRef: "community", title: "Synthetic source", peerId: "-900", limit: input?.limit ?? 30,
+                  ...(input?.beforeMessageId ? { beforeMessageId: input.beforeMessageId } : {}) });
+              }, async close() { if (!closed) { closed = true; liveLeases--; } } };
+          } };
+        } };
+      };
+      f.ports.dispatch = async args => { assert.equal(liveLeases, 0); return originalDispatch(args); };
+      f.connection.turn = async (requestRef, text) => {
+        const packet = JSON.parse(text);
+        assert.equal(JSON.stringify(packet.currentRequest).includes("Source complaint"), false);
+        const tool = f.tools().find(tool => tool.name === "neurobro_community")!;
+        const result = await tool.call({ action: "read", beforeMessageId: null, limit: 30 },
+          { requestRef, callRef: "source-read", signal: f.input.signal }) as EpochToolResult;
+        assert.equal(result.success, true);
+        assert.ok(JSON.stringify(result).includes("Source complaint"));
+        assert.ok(JSON.stringify(result).includes('obs_'));
+        assert.equal(JSON.stringify(result).includes('"peerId"'), false);
+        return { kind: "text", answer: "Internal summary" };
+      };
+      const result = await runStandingWithPorts(f.input, f.ports);
+      assert.equal(result.status, "stopped"); assert.equal(result.verifiedReplies, 2);
+      assert.equal(reads, 2); assert.equal(liveLeases, 0); assert.equal(f.counters().clients, 1);
+      assert.equal((await f.tools().find(tool => tool.name === "neurobro_community")!.call({ action: "status", beforeMessageId: null, limit: null },
+        { requestRef: "expired", callRef: "late", signal: new AbortController().signal }) as EpochToolResult).success, false);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("community absent or damaged binding is unavailable without stopping internal assistant", async () => {
+  const root = await mkdtemp(join(tmpdir(), "neurobro-source-unavailable-"));
+  try {
+    for (const mode of ["absent", "damaged", "not-found"] as const) {
+      const f = await learningFixture(root), originalAdapter = f.ports.adapter;
+      if (mode !== "absent") f.input = { ...f.input, observedSource: { title: "Synthetic source" } };
+      if (mode === "damaged") await writeFile(join(f.input.stateDirectory, "observed-source-binding.json"), "malformed", { mode: 0o600 });
+      if (mode === "not-found") await rm(join(f.input.stateDirectory, "observed-source-binding.json"));
+      f.ports.adapter = async args => {
+        assert.equal(args.observedSource !== undefined, mode === "not-found");
+        const adapter = await originalAdapter(args);
+        return { ...adapter, async next(signal) { return { ...await adapter.next(signal),
+          ...(mode === "not-found" ? { observedSourceStatus: { status: "unavailable" as const, code: "not-found" as const } } : {}) }; } };
+      };
+      f.connection.turn = async requestRef => {
+        const result = await f.tools().find(tool => tool.name === "neurobro_community")!.call({ action: "status", beforeMessageId: null, limit: null },
+          { requestRef, callRef: "source-status", signal: f.input.signal }) as EpochToolResult;
+        assert.ok(JSON.stringify(result).includes(mode === "absent" ? "not-configured" : mode === "damaged" ? "binding-unavailable" : "not-found"));
+        return { kind: "text", answer: "Internal assistance remains available" };
+      };
+      const result = await runStandingWithPorts(f.input, f.ports);
+      assert.equal(result.status, "stopped"); assert.equal(result.verifiedReplies, 2);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("work learning crosses actual tool save, next input, service reopen and retirement", async () => {
+  const root = await mkdtemp(join(tmpdir(), "neurobro-learning-service-"));
+  const lesson = "Use short direct replies when this colleague asks for a draft.";
+  const args = { action: "save", key: "reply-style", expectedRevision: null, kind: "preference", scope: "self", text: lesson, query: null };
+  try {
+    const first = await learningFixture(root); let turns = 0;
+    first.connection.turn = async (requestRef, text) => {
+      const packet = JSON.parse(text);
+      if (++turns === 1) {
+        assert.equal(JSON.stringify(packet.contextState.learning).includes(lesson), false);
+        const result = await first.tools().find(tool => tool.name === "neurobro_memory")!.call(args, { requestRef, callRef: "learn-first", signal: first.input.signal }) as EpochToolResult;
+        assert.equal(result.success, true);
+      } else assert.ok(JSON.stringify(packet.contextState.learning).includes(lesson));
+      return { kind: "text", answer: "Draft prepared" };
+    };
+    const result = await runStandingWithPorts(first.input, first.ports);
+    assert.equal(result.status, "stopped"); assert.equal(result.verifiedReplies, 2);
+    const late = await first.tools().find(tool => tool.name === "neurobro_memory")!.call(args, { requestRef: "old", callRef: "late", signal: new AbortController().signal }) as EpochToolResult;
+    assert.equal(late.success, false);
+    const second = await learningFixture(root); turns = 0;
+    second.connection.turn = async (requestRef, text) => {
+      const packet = JSON.parse(text);
+      if (++turns === 1) {
+        assert.ok(JSON.stringify(packet.contextState.learning).includes(lesson));
+        const result = await second.tools().find(tool => tool.name === "neurobro_memory")!.call({ ...args, action: "retire", expectedRevision: 1, kind: null, text: null },
+          { requestRef, callRef: "retire-first", signal: second.input.signal }) as EpochToolResult;
+        assert.equal(result.success, true);
+      } else assert.equal(JSON.stringify(packet.contextState.learning).includes(lesson), false);
+      return { kind: "text", answer: "Updated" };
+    };
+    const reopened = await runStandingWithPorts(second.input, second.ports);
+    assert.equal(reopened.status, "stopped"); assert.equal(reopened.verifiedReplies, 2);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("work profile without a matching workspace refuses before client or model", async () => {
+  const f = warmFixture(); f.input = { ...f.input, workProfile: "team-assistant" };
+  const result = await runStandingWithPorts(f.input, f.ports);
+  assert.equal(result.status, "blocked"); assert.equal(result.failureStage, "prepare");
+  assert.equal(f.counters().clients, 0); assert.equal(f.packets.length, 0);
+});
+
+test("learning lookup accepts a long request cut exactly at a word boundary", async () => {
+  const root = await mkdtemp(join(tmpdir(), "neurobro-learning-query-"));
+  try {
+    const f = await learningFixture(root), originalAdapter = f.ports.adapter;
+    const text = "Нейробро, " + "а".repeat(53) + " следующий вопрос";
+    assert.equal([...text][63], " ");
+    f.ports.adapter = async args => {
+      const adapter = await originalAdapter({ ...args, checkpointQuestion: (primary, context) => args.checkpointQuestion!({ ...primary, text }, context) });
+      return { ...adapter, async next(signal) {
+        const selected = await adapter.next(signal);
+        return { ...selected, primary: { ...selected.primary, text } };
+      } };
+    };
+    const result = await runStandingWithPorts(f.input, f.ports);
+    assert.equal(result.status, "stopped"); assert.equal(result.verifiedReplies, 2);
+    assert.equal(f.packets[0]!.currentRequest.text, text);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 function initiativeFixture(answer: string | null, directAnswer = "Direct answer after initiative", mode: "initiative" | "continuation" = "initiative") {
   const f = warmFixture(), originalAdapter = f.ports.adapter, originalTurn = f.connection.turn, originalDispatch = f.ports.dispatch;
@@ -406,16 +653,16 @@ test("actual read-only repository handlers reach warm turns and stop with the se
   let tools: readonly EpochExtraTool[] = [];
   f.input = { ...f.input, repositorySnapshot: snapshot, openConversation(input) { tools = input.extraTools!; return f.connection; } };
   f.connection.turn = async requestRef => {
-    assert.deepEqual(tools.map(tool => tool.name), ["neurobro_repo_info", "neurobro_repo_search", "neurobro_repo_read"]);
+    assert.deepEqual(tools.map(tool => tool.name), [STANDING_CHAT_SEARCH_TOOL_SPEC.name, "neurobro_repo_info", "neurobro_repo_search", "neurobro_repo_read"]);
     const scope = { requestRef, callRef: "repo-call", signal: f.input.signal };
-    const info = await tools[0]!.call({}, scope) as EpochToolResult, read = await tools[2]!.call({ path: "src/example.ts", offset: 0 }, scope) as EpochToolResult;
+    const info = await tools[1]!.call({}, scope) as EpochToolResult, read = await tools[3]!.call({ path: "src/example.ts", offset: 0 }, scope) as EpochToolResult;
     assert.equal(info.success, true); assert.equal(read.success, true);
     assert.ok(JSON.stringify(info).includes(sourceCommit)); assert.ok(JSON.stringify(read).includes("export const answer = 42;"));
     return { kind: "text", answer: "В этой версии answer равен 42" };
   };
   const result = await runStandingWithPorts(f.input, f.ports);
   assert.equal(result.verifiedReplies, 2); assert.equal(result.status, "stopped"); assert.equal(f.counters().clients, 1);
-  const after = await tools[0]!.call({}, { requestRef: "later", callRef: "later", signal: new AbortController().signal }) as EpochToolResult;
+  const after = await tools[1]!.call({}, { requestRef: "later", callRef: "later", signal: new AbortController().signal }) as EpochToolResult;
   assert.equal(after.success, false);
 });
 
@@ -486,7 +733,7 @@ test("artifact handlers stay registered while per-turn ownership joins before fi
   f.connection.turn = async (ref, text) => { assert.equal(active, ref); for (const handler of seen) await handler.call({}, { requestRef: ref, callRef: "fixture", signal: f.input.signal }); return turn(ref, text); };
   const dispatch = f.ports.dispatch; f.ports.dispatch = async arg => { assert.equal(active, undefined); assert.equal(f.events.at(-1), "fixture/outbox-" + arg.reply.replyToMessageId); return dispatch(arg); };
   const result = await runStandingWithPorts(f.input, f.ports); assert.equal(result.status, "stopped"); assert.equal(result.verifiedReplies, 2);
-  assert.deepEqual(seen.map(h => h.name), STANDING_ARTIFACT_TOOL_SPECS.map(s => s.name)); assert.equal(f.events.filter(e => e === "artifact-call").length, 8);
+  assert.deepEqual(seen.map(h => h.name), [STANDING_CHAT_SEARCH_TOOL_SPEC.name, ...STANDING_ARTIFACT_TOOL_SPECS.map(s => s.name)]); assert.equal(f.events.filter(e => e === "artifact-call").length, 8);
   assert.equal(f.events.filter(e => e === "artifact-finish").length, 2); assert.ok(f.events.indexOf("artifact-finish") < f.events.indexOf("send-1"));
   assert.ok(f.events.includes("artifact-close")); assert.equal(f.events.filter(e => e === "settle-client").length, 1);
 });
@@ -646,7 +893,7 @@ test("adapter initialization failure settles and joins an already-created media 
   assert.equal(result.verifiedReplies, 2);
 });
 
-test("group flag forwards only source-owned adapter handlers and joins after client interruption",async()=>{
+test("group flag adds source-owned adapter handlers after universal search and joins after client interruption",async()=>{
   const f=warmFixture(), originalAdapter=f.ports.adapter, originalClose=f.connection.close, originalSettle=f.ports.settle;
   let resolveIo!:()=>void;const io=new Promise<void>(done=>{resolveIo=done;});let seen:readonly EpochExtraTool[]|undefined;
   const handlers=Object.freeze([Object.freeze({name:"neurobro_group_info",call:async()=>({success:true,contentItems:[{type:"inputText",text:'{"title":"bound"}'}]})})]);
@@ -655,7 +902,7 @@ test("group flag forwards only source-owned adapter handlers and joins after cli
   f.input={...f.input,enableGroupTools:true,openConversation(arg){seen=arg.extraTools;return f.connection;}};
   f.connection.close=async()=>{f.events.push("native-close-start");await io;return originalClose();};
   f.ports.settle=async client=>{assert.ok(f.events.includes("native-close-start"));assert.ok(f.events.includes("capability-close-start"));resolveIo();return originalSettle(client);};
-  const result=await runStandingWithPorts(f.input,f.ports);assert.equal(result.status,"stopped");assert.equal(seen,handlers);
+  const result=await runStandingWithPorts(f.input,f.ports);assert.equal(result.status,"stopped");assert.deepEqual(seen?.map(tool=>tool.name),[STANDING_CHAT_SEARCH_TOOL_SPEC.name,...handlers.map(tool=>tool.name)]);assert.equal(seen?.[1],handlers[0]);
   assert.equal(f.events.filter(e=>e==="settle-client").length,1);assert.ok(f.events.indexOf("capability-joined")<f.events.indexOf("release-lock"));
   assert.throws(()=>f.refs().message(1));
 });
@@ -684,17 +931,118 @@ test("bound actions are registered and scoped to each model turn then joined bef
   const dispatch = f.ports.dispatch; f.ports.dispatch = async arg => { assert.equal(active, undefined); return dispatch(arg); };
   const result = await runStandingWithPorts(f.input, f.ports);
   assert.equal(result.verifiedReplies, 2); assert.equal(result.status, "stopped");
-  assert.deepEqual(seen.map(h => h.name), BOUND_ACTION_TOOL_SPECS.map(s => s.name));
+  assert.deepEqual(seen.map(h => h.name), [STANDING_CHAT_SEARCH_TOOL_SPEC.name, ...BOUND_ACTION_TOOL_SPECS.map(s => s.name)]);
   assert.equal(f.events.filter(e => e === "bound-action-call").length, BOUND_ACTION_TOOL_SPECS.length * 2);
   assert.ok(f.events.indexOf("actions-finish") < f.events.indexOf("send-1"));
   assert.ok(f.events.includes("actions-close")); assert.equal(f.events.filter(e => e === "settle-client").length, 1);
 });
 
-test("absent group flag preserves history-only openConversation input",async()=>{
+test("absent workspace and group flag still register universal chat search",async()=>{
   const f=warmFixture(),originalAdapter=f.ports.adapter,originalOpen=f.input.openConversation!;
   f.ports.adapter=async arg=>{assert.equal(Object.hasOwn(arg,"enableGroupTools"),false);return originalAdapter(arg);};
-  f.input={...f.input,openConversation(arg){assert.equal(Object.hasOwn(arg,"extraTools"),false);return originalOpen(arg);}};
+  f.input={...f.input,openConversation(arg){assert.deepEqual(arg.extraTools?.map(tool=>tool.name),[STANDING_CHAT_SEARCH_TOOL_SPEC.name]);return originalOpen(arg);}};
   assert.equal((await runStandingWithPorts(f.input,f.ports)).status,"stopped");
+});
+
+const currentChatSearch = { action: "search", source: "internal", query: "needle", fromDate: null, toDate: null, cursor: null, messageRef: null };
+
+test("unavailable search remains scoped and does not consume the ordinary final reply", async () => {
+  const f = warmFixture(); let tools: readonly EpochExtraTool[] = [];
+  f.input = { ...f.input, openConversation(input) { tools = input.extraTools!; return f.connection; } };
+  f.connection.turn = async requestRef => {
+    assert.deepEqual(tools.map(tool => tool.name), [STANDING_CHAT_SEARCH_TOOL_SPEC.name]);
+    const result = await tools[0]!.call(currentChatSearch, { requestRef, callRef: "search", signal: f.input.signal }) as EpochToolResult;
+    assert.equal(result.success, false); assert.equal(JSON.parse(result.contentItems[0].text).code, "unavailable");
+    return { kind: "text", answer: "Поиск сейчас недоступен" };
+  };
+  const result = await runStandingWithPorts(f.input, f.ports); assert.equal(result.verifiedReplies, 2); assert.equal(result.status, "stopped");
+  assert.equal(f.counters().clients, 1);
+  const after = await tools[0]!.call(currentChatSearch, { requestRef: "ended", callRef: "search", signal: new AbortController().signal }) as EpochToolResult;
+  assert.equal(after.success, false); assert.equal(JSON.parse(after.contentItems[0].text).code, "invalid-scope");
+});
+
+test("service binds real search projection to each selected turn and releases it before final delivery", async () => {
+  const f = warmFixture(), originalAdapter = f.ports.adapter, dispatch = f.ports.dispatch;
+  let tools: readonly EpochExtraTool[] = [], opened = 0, closed = 0, calls = 0, previousRequestRef: string | undefined;
+  f.ports.adapter = async arg => {
+    const adapter = await originalAdapter(arg);
+    return { ...adapter, async next(signal) {
+      const selected = await adapter.next(signal);
+      return { ...selected, openChatSearch(source) {
+        assert.equal(source, "internal"); opened++;
+        const lease = createStandingChatSearchLease({ source, title: "Current chat", peer: new Api.InputPeerChat({ chatId: bigInt(200) }),
+          binding: { accountId: "100", peerId: "-200" }, signal, async invoke(request) {
+            calls++; assert.ok(request instanceof Api.messages.Search); assert.equal(request.q, "needle");
+            const decoded = new BinaryReader(request.getBytes()).tgReadObject(); assert.equal(decoded.className, "messages.Search");
+            return new BinaryReader(new Api.messages.Messages({ messages: [new Api.Message({ id: 70, date: 90,
+              peerId: new Api.PeerChat({ chatId: bigInt(200) }), fromId: new Api.PeerUser({ userId: bigInt(300) }), message: "quoted needle" })],
+              users: [new Api.User({ id: bigInt(300), firstName: "Reader" })], chats: [] }).getBytes()).tgReadObject();
+          } });
+        let closing: Promise<void> | undefined;
+        return { read: lease.read, close() { return closing ??= lease.close().then(() => { closed++; f.events.push("search-closed"); }); } };
+      } };
+    } };
+  };
+  f.input = { ...f.input, openConversation(input) { tools = input.extraTools!; return f.connection; } };
+  f.connection.turn = async requestRef => {
+    const tool = tools.find(tool => tool.name === STANDING_CHAT_SEARCH_TOOL_SPEC.name)!;
+    if (previousRequestRef) {
+      const stale = await tool.call(currentChatSearch, { requestRef: previousRequestRef, callRef: "stale", signal: f.input.signal }) as EpochToolResult;
+      assert.equal(stale.success, false); assert.equal(JSON.parse(stale.contentItems[0].text).code, "invalid-scope");
+    }
+    const found = await tool.call(currentChatSearch, { requestRef, callRef: "search", signal: f.input.signal }) as EpochToolResult;
+    assert.equal(found.success, true); const body = JSON.parse(found.contentItems[0].text);
+    assert.equal(body.items[0].text, "quoted needle"); assert.equal(body.applicationAuthority, "none");
+    assert.equal(body.source.sourceRef, "internal"); assert.equal(body.source.readOnly, true);
+    assert.equal(closed, opened); previousRequestRef = requestRef;
+    return { kind: "text", answer: "Нашёл упоминание в переписке" };
+  };
+  f.ports.dispatch = async arg => { assert.equal(closed, opened); assert.ok(closed > 0); return dispatch(arg); };
+  const result = await runStandingWithPorts(f.input, f.ports);
+  assert.equal(result.verifiedReplies, 2); assert.equal(result.status, "stopped"); assert.equal(calls, 2); assert.equal(opened, 2); assert.equal(closed, 2);
+  assert.equal(f.counters().clients, 1); assert.equal(f.releases.length, 2);
+});
+
+for (const settleSucceeded of [true, false]) test(`aborted model search honors sole-client I/O settlement: ${settleSucceeded ? "joined" : "unsettled"}`, async () => {
+  const f = warmFixture(fixture({ teardownFails: !settleSucceeded })), originalAdapter = f.ports.adapter, settle = f.ports.settle;
+  let tools: readonly EpochExtraTool[] = [], readResult: Promise<unknown> | undefined, emergencyRelease = false;
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; }), began = new Promise<void>(resolve => { entered = resolve; });
+  f.ports.adapter = async arg => {
+    const adapter = await originalAdapter(arg);
+    return { ...adapter, async closeCapabilities() { f.events.push("search-capabilities-close"); }, async next(signal) {
+      return { ...await adapter.next(signal), openChatSearch(source) {
+        return createStandingChatSearchLease({ source, title: "Current chat", peer: new Api.InputPeerChat({ chatId: bigInt(200) }),
+          binding: { accountId: "100", peerId: "-200" }, signal, async invoke(request) {
+            assert.ok(request instanceof Api.messages.Search); entered(); await gate; f.events.push("search-io-settled");
+            return new Api.messages.Messages({ messages: [], users: [], chats: [] });
+          } });
+      } };
+    } };
+  };
+  f.ports.settle = async client => { f.events.push("client-interrupt-search"); if (settleSucceeded) release(); return settle(client); };
+  f.input = { ...f.input, openConversation(input) { tools = input.extraTools!; return f.connection; } };
+  f.connection.turn = async requestRef => {
+    readResult = Promise.resolve(tools[0]!.call(currentChatSearch, { requestRef, callRef: "blocked-search", signal: f.input.signal }));
+    await began; f.abort.abort(); throw Error("model-stopped-with-search-pending");
+  };
+  const running = runStandingWithPorts(f.input, f.ports);
+  await began;
+  const bailout = setTimeout(() => { emergencyRelease = true; release(); }, 500);
+  try {
+    const result = await running;
+    assert.equal(emergencyRelease, false, "per-turn cleanup joined blocked search before the sole client could interrupt I/O");
+    assert.equal(result.status, settleSucceeded ? "stopped" : "blocked"); assert.equal(result.verifiedReplies, 0); assert.equal(result.lockPreserved, !settleSucceeded);
+    assert.equal(f.counters().clients, 1);
+    if (settleSucceeded) {
+      await readResult;
+      assert.ok(f.events.indexOf("client-interrupt-search") < f.events.indexOf("search-io-settled"));
+      assert.ok(f.events.indexOf("search-io-settled") < f.events.indexOf("release-lock"));
+    } else {
+      assert.equal(f.events.includes("search-io-settled"), false); assert.equal(f.events.includes("release-lock"), false);
+      assert.ok(f.refs().matches("-200", "100")); release(); await readResult; f.refs().close();
+    }
+  } finally { clearTimeout(bailout); release(); }
 });
 
 test("failed client settlement never waits forever on group callbacks or permits replacement",async()=>{
@@ -748,13 +1096,16 @@ test("consumed failed native turn resumes only the next question after all owner
   };
   f.connection.close=async()=>{const proof=await close();f.events.push("model-proof-persisted");return proof;};
   const result=await runStandingWithPorts(f.input,f.ports);
-  assert.equal(result.status,"stopped");assert.equal(result.verifiedReplies,1);assert.equal(result.lockPreserved,false);
+  assert.equal(result.status,"stopped");assert.equal(result.verifiedReplies,2);assert.equal(result.lockPreserved,false);
   assert.equal(f.counters().clients,2);assert.equal(calls,2);
   assert.deepEqual(f.events.filter(e=>e.startsWith("attempt-")),["attempt-1","attempt-2"]);
-  assert.ok(!f.events.includes("send-1"));assert.ok(f.events.includes("send-2"));
+  assert.ok(f.events.includes("send-1"));assert.ok(f.events.includes("send-2"));
+  assert.ok(f.events.indexOf("model-proof-persisted") < f.events.indexOf("send-1"));
   assert.ok(f.events.indexOf("model-proof-persisted")<f.events.indexOf("STANDING_RECONNECTING"));
   assert.ok(f.events.indexOf("settle-client")<f.events.indexOf("STANDING_RECONNECTING"));
-  assert.equal(f.outcomes.some(v=>v.key==="0000000001"),false); // Existing admission remains UNKNOWN, never fabricated success.
+  assert.equal(f.outcomes[0]!.kind,"deferred");
+  assert.match(f.outcomes[0]!.answer!, /Результат выполнения действий не подтверждён/);
+  assert.equal(f.releases.length,1); // Failure notice never releases/replays the failed model turn.
 });
 
 for(const failure of ["native","persistence","telegram","unclassified"] as const)test(`failed native turn does not reconnect without ${failure} acceptance`,async()=>{
@@ -765,7 +1116,7 @@ for(const failure of ["native","persistence","telegram","unclassified"] as const
   const result=await runStandingWithPorts(f.input,f.ports);
   assert.equal(result.status,"blocked");assert.equal(result.lockPreserved,true);
   assert.equal(f.counters().clients,1);assert.ok(!f.events.includes("STANDING_RECONNECTING"));
-  assert.ok(!f.events.some(e=>e.startsWith("send-")));
+  assert.equal(f.events.some(e=>e.startsWith("send-")),failure==="telegram");
 });
 
 test("unknown native resource settlement preserves the lock and reference lifetime", async () => {
@@ -1425,4 +1776,40 @@ test("tracked successful and failed invocations preserve results and destroy fai
   assert.equal(await owner.run(async()=>42),42);
   const failure=Error("actual RPC refusal");await assert.rejects(owner.run(async()=>{throw failure;}),error=>error===failure);
   assert.equal(await owner.settle(),false);assert.equal(destroys,1);
+});
+
+
+test("failed turn notice is suppressed by STOP arriving during native settlement", async () => {
+  const f=warmFixture(), close=f.connection.close;
+  f.connection.state=()=>({blocked:false,failedTurn:true});
+  f.connection.turn=async()=>{throw Error("native failure");};
+  f.connection.close=async()=>{const result=await close();f.abort.abort();return result;};
+  await runStandingWithPorts(f.input,f.ports);
+  assert.ok(!f.events.some(event=>event.startsWith("send-")));
+  assert.equal(f.outcomes.length,0);
+});
+
+test("uncertain failure notice delivery is consumed once without retrying the failed question", async () => {
+  const f=warmFixture(), turn=f.connection.turn, open=f.input.openConversation!;
+  let failed=false,calls=0,sends=0;
+  f.input={...f.input,openConversation(arg){failed=false;return open(arg);}};
+  f.connection.state=()=>({blocked:false,failedTurn:failed});
+  f.connection.turn=async(ref,text)=>{if(++calls===1){failed=true;throw Error("native failure");}return turn(ref,text);};
+  f.ports.dispatch=async()=>++sends===1?{state:"unknown",code:"send-unknown"} as any:{state:"verified",code:"verified"};
+  const result=await runStandingWithPorts(f.input,f.ports);
+  assert.equal(result.status,"stopped");assert.equal(calls,2);assert.equal(sends,2);
+  assert.equal(f.outcomes[0]!.delivery,"unknown");assert.equal(f.outcomes[0]!.kind,"deferred");
+  assert.equal(f.releases.length,1);
+});
+
+
+for (const mode of ["initiative", "continuation"] as const) test(`failed ${mode} assessment never creates an unsolicited failure notice`, async () => {
+  const f=warmFixture(), adapter=f.ports.adapter;
+  f.input={...f.input,enableInitiative:true};
+  f.ports.adapter=async arg=>{const original=await adapter(arg);return {...original,async next(signal){return {...await original.next(signal),[mode]:true,finishInitiative:async()=>{}};}};};
+  f.connection.state=()=>({blocked:false,failedTurn:true});
+  f.connection.turn=async()=>{throw Error("native failure");};
+  await runStandingWithPorts(f.input,f.ports);
+  assert.ok(!f.events.some(event=>event.startsWith("send-")));
+  assert.equal(f.outcomes.length,0);
 });

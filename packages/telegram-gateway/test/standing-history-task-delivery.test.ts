@@ -15,7 +15,7 @@ import { createStandingHistoryAnalysisPlanner, type StandingHistoryAnalysisPlan 
 import { prepareStandingHistoryAnalysisMaterial } from "../src/standing-history-analysis-runtime.js";
 import { runStandingHistoryTaskDelivery, readStandingHistoryTaskDelivery, prepareStandingHistoryTaskDeliveryText } from "../src/standing-history-task-delivery.js";
 import { decryptSession } from "../src/session-crypto.js";
-import { PilotPreDispatchError, type PilotRecord, type PilotSend } from "../src/pilot-outbox.js";
+import { PilotPreDispatchError, tagPilotTaskSendError, type PilotRecord, type PilotSend } from "../src/pilot-outbox.js";
 import type { StandingTaskReplyLease } from "../src/standing-conversation-adapter.js";
 import type { StandingOwnActionCaptureEvent } from "../src/standing-own-action-capture.js";
 
@@ -59,7 +59,7 @@ async function fixture(t: TestContext, outcome: "observed" | "unknown" | "refuse
   const readiness = await selected(); assert.equal(readiness.kind, "analysis-ready"); if (readiness.kind !== "analysis-ready") throw Error("expected ready");
   await planner.close(); await attempts.close(); await analysis.close(); await source.close(); await control.close();
   const proofs: StandingHistoryAnalysisNativeBinding[] = [];
-  const args = { ...binding, directories, readiness, signal: controller.signal, async verifyOwnerReady(value: StandingHistoryAnalysisNativeBinding) {
+  const args = { ...binding, directories, readiness, finalReport: { schema: "standing-history-final-report-v1" as const, taskRef: intent.taskId, sourceHead: readiness.sourceHead, analysisHead: readiness.expectedHead, body: "User-facing report" }, signal: controller.signal, async verifyOwnerReady(value: StandingHistoryAnalysisNativeBinding) {
     proofs.push(value); return { schema: "standing-analysis-owner-ready-v1" as const, nativeBinding: value, basis: "persisted-owner-settlement" as const, modelOutcome: "not-proven" as const };
   } };
   const slot = join(directories.delivery, intent.taskId);
@@ -67,6 +67,133 @@ async function fixture(t: TestContext, outcome: "observed" | "unknown" | "refuse
   return { root, binding, directories, controller, readiness, node, proofs, args, slot, inspect };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
+
+test("large report splitting preserves UTF-8 and paragraph bytes deterministically", async t => {
+  const f = await fixture(t), body = ("А".repeat(1550) + "\n\n" + "🦈".repeat(260) + "\n").repeat(3);
+  const input = { intent: f.binding.intent, readiness: f.readiness, body };
+  const prepared = prepareStandingHistoryTaskDeliveryText(input);
+  assert.ok(prepared.parts.length > 2); assert.ok(prepared.parts.length <= 16);
+  assert.equal(prepared.parts.filter(part => part.kind === "body").map(part => part.text).join(""), body);
+  assert.equal(prepared.parts[0]!.text, "А".repeat(1550) + "\n\n");
+  assert.equal(prepared.text, body + "\n\n" + prepared.parts.at(-1)!.text);
+  for (const [index, part] of prepared.parts.entries()) {
+    assert.equal(part.index, index + 1); assert.equal(part.textHash, digest(part.text));
+    assert.ok(Buffer.byteLength(part.text) <= 4096); assert.equal(part.text.includes("�"), false);
+  }
+  assert.deepEqual(prepareStandingHistoryTaskDeliveryText(input), prepared);
+  const maximum = prepareStandingHistoryTaskDeliveryText({ ...input, body: "🦈".repeat(8192) });
+  assert.equal(maximum.parts.length, 9);
+  assert.equal(maximum.parts.slice(0, -1).map(part => part.text).join(""), "🦈".repeat(8192));
+  assert.throws(() => prepareStandingHistoryTaskDeliveryText({ ...input, body: "🦈".repeat(8193) }));
+});
+
+test("v3 variable report parts resume from authenticated prefix and finish once", async t => {
+  const f = await fixture(t), body = "r".repeat(8500), report = { ...f.args.finalReport, body };
+  const prepared = prepareStandingHistoryTaskDeliveryText({ intent: f.binding.intent, readiness: f.readiness, body });
+  const { finalReport: _report, ...recovery } = f.args;
+  const prior: { path: string; bytes: Buffer }[] = [];
+  for (const part of prepared.parts) {
+    const transport = ticket(f, "verified", part.index);
+    const result = await runStandingHistoryTaskDelivery({ ...recovery, ...(part.index === 1 ? { finalReport: report } : {}), ticket: transport.value });
+    assert.equal(result.descriptor.schema, "standing-history-task-delivery-v3");
+    assert.equal(result.partsTotal, prepared.parts.length); assert.equal(transport.sent.text, part.text);
+    assert.equal(result.deliveryComplete, part.index === prepared.parts.length);
+    for (const saved of prior) assert.deepEqual(await readFile(saved.path), saved.bytes);
+    const path = join(f.slot, `part-${String(part.index).padStart(2, "0")}`, "pilot", "terminal.enc"); prior.push({ path, bytes: await readFile(path) });
+    const state = await f.inspect(); assert.equal(state.verifiedParts, part.index);
+    assert.equal(state.nextPart, part.index === prepared.parts.length ? undefined : part.index + 1);
+  }
+  const transport = ticket(f);
+  await assert.rejects(runStandingHistoryTaskDelivery({ ...recovery, ticket: transport.value }), /CONSUMED/);
+  assert.equal(transport.counts.opens, 0);
+});
+
+test("report splitting retains whitespace tails at exact byte boundaries", async t => {
+  const f = await fixture(t), base = { intent: f.binding.intent, readiness: f.readiness };
+  for (const body of ["x".repeat(4096) + "\n", "🦈".repeat(1024) + "\r\n", "x".repeat(3000) + " ".repeat(4095)]) {
+    const prepared = prepareStandingHistoryTaskDeliveryText({ ...base, body });
+    const chunks = prepared.parts.filter(part => part.kind === "body");
+    assert.equal(chunks.map(part => part.text).join(""), body);
+    assert.ok(chunks.every(part => part.text.trim() && Buffer.byteLength(part.text) <= 4096));
+  }
+  // These cannot be sent without either a blank Telegram message or deleting
+  // source whitespace. Refusal must occur during preparation, not mid-send.
+  for (const body of [" ".repeat(4096) + "x", "x" + " ".repeat(8192)]) {
+    assert.throws(() => prepareStandingHistoryTaskDeliveryText({ ...base, body }), /INPUT/);
+  }
+});
+
+test("v3 UNKNOWN middle part prevents subsequent parts and replay", async t => {
+  const f = await fixture(t), finalReport = { ...f.args.finalReport, body: "x".repeat(8500) };
+  await runStandingHistoryTaskDelivery({ ...f.args, finalReport, ticket: ticket(f, "verified", 1).value });
+  const second = ticket(f, "unknown", 2);
+  await runStandingHistoryTaskDelivery({ ...f.args, finalReport, ticket: second.value });
+  const state = await f.inspect(); assert.equal(state.delivery, "unknown"); assert.equal(state.verifiedParts, 1); assert.equal(state.nextPart, undefined);
+  await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, finalReport, ticket: second.value }), /CONSUMED/);
+  assert.equal(second.counts.sends, 1); assert.equal(existsSync(join(f.slot, "part-03")), false);
+});
+
+test("v3 out-of-order later slot refuses recovery without consuming the missing part", async t => {
+  const f = await fixture(t), finalReport = { ...f.args.finalReport, body: "x".repeat(8500) };
+  await runStandingHistoryTaskDelivery({ ...f.args, finalReport, ticket: ticket(f, "verified", 1).value });
+  await mkdir(join(f.slot, "part-03"));
+  const status = await f.inspect(); assert.equal(status.storage, "unavailable"); assert.equal(status.nextPart, undefined);
+  const transport = ticket(f, "verified", 2);
+  await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, finalReport, ticket: transport.value }), /CONSUMED/);
+  assert.equal(transport.counts.opens, 0); assert.equal(existsSync(join(f.slot, "part-02")), false);
+});
+
+test("maximum escaped v3 report survives encrypted descriptor reconstruction", async t => {
+  const f = await fixture(t, "observed", "\u0002".repeat(4096));
+  const body = "\u0001".repeat(32768), transport = ticket(f, "verified", 1);
+  const result = await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: transport.value });
+  assert.equal(result.partsTotal, 9); assert.equal(result.descriptor.body, body);
+  const ciphertext = await readFile(join(f.slot, "descriptor.enc"), "utf8");
+  assert.ok(Buffer.byteLength(ciphertext) <= 393216);
+  const plain = await decryptSession(ciphertext, f.binding.passphrase); assert.ok(Buffer.byteLength(plain) <= 262144);
+  assert.equal((await f.inspect()).descriptor?.body, body);
+  assert.equal((await f.inspect()).nextPart, 2);
+});
+
+test("analysis readiness alone and a legacy body cannot initiate report delivery", async t => {
+  const f = await fixture(t), transport = ticket(f);
+  const { finalReport: _report, ...unfinalized } = f.args;
+  for (const input of [unfinalized, { ...unfinalized, body: "Private root summary" }]) {
+    await assert.rejects(runStandingHistoryTaskDelivery({ ...input, ticket: transport.value }), /REPORT-REQUIRED/);
+    assert.deepEqual(await f.inspect(), { storage: "absent", consumed: false, delivery: "not-attempted" });
+    assert.deepEqual(await readdir(f.directories.delivery), []);
+  }
+  assert.deepEqual(transport.counts, { opens: 0, sends: 0, reads: 0, closes: 0 });
+  assert.equal(f.proofs.length, 0);
+  const accepted = await runStandingHistoryTaskDelivery({ ...f.args, ticket: transport.value });
+  assert.equal(accepted.descriptor.body, "User-facing report");
+  assert.equal(transport.sent.text.includes("Private root summary"), false);
+});
+
+test("final report must belong to the exact task and source/analysis frontier", async t => {
+  const f = await fixture(t), transport = ticket(f);
+  for (const patch of [{ taskRef: "htask_" + "8".repeat(48) }, { sourceHead: "0".repeat(64) }, { analysisHead: "0".repeat(64) }]) {
+    await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, ...patch }, ticket: transport.value }), /STALE/);
+  }
+  let invoked = 0;
+  await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, get body() { invoked++; return "bad"; } }, ticket: transport.value }), /INPUT/);
+  assert.equal(invoked, 0); assert.equal(transport.counts.opens, 0);
+  assert.deepEqual(await readdir(f.directories.delivery), []);
+});
+
+test("persisted multipart recovery needs no new report and never replays a verified part", async t => {
+  const f = await fixture(t), first = ticket(f, "verified", 1);
+  await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body: "r".repeat(4096) }, ticket: first.value });
+  const terminal = join(f.slot, "part-01", "pilot", "terminal.enc"), before = await readFile(terminal);
+  const { finalReport: _report, ...recovery } = f.args;
+  const second = ticket(f, "verified", 2);
+  const result = await runStandingHistoryTaskDelivery({ ...recovery, ticket: second.value });
+  assert.equal(result.deliveryComplete, true); assert.equal(result.partIndex, 2);
+  assert.deepEqual(await readFile(terminal), before); assert.equal(first.counts.sends, 1); assert.equal(second.counts.sends, 1);
+  await assert.rejects(runStandingHistoryTaskDelivery({ ...recovery, ticket: second.value }), /CONSUMED/);
+  assert.equal(second.counts.sends, 1);
+});
+
 async function pilot(f: Fixture, name: string, partIndex?: number): Promise<PilotRecord> {
   const directory = partIndex === undefined ? f.slot : join(f.slot, `part-${String(partIndex).padStart(2, "0")}`);
   const envelope = JSON.parse(await readFile(join(directory, "pilot", name + ".enc"), "utf8"));
@@ -108,7 +235,7 @@ test("real delivery persists exact root descriptor and encrypted verified pilot 
   const delivered = await runStandingHistoryTaskDelivery({ ...f.args, ticket: transport.value });
   assert.equal(delivered.result.state, "verified"); assert.equal(delivered.leaseJoined, true);
   assert.equal(delivered.descriptor.rootRef, f.node.nodeRef); assert.equal(delivered.descriptor.rootHash, f.node.hash);
-  assert.equal(delivered.descriptor.body, "Private root summary"); assert.equal(delivered.descriptor.text, transport.sent.text);
+  assert.equal(delivered.descriptor.body, "User-facing report"); assert.equal(delivered.descriptor.text, transport.sent.text);
   assert.deepEqual(delivered.descriptor.coverage, f.readiness.coverage); assert.deepEqual(delivered.descriptor.gaps, f.readiness.gaps);
   assert.equal(transport.sent.replyToMessageId, f.binding.intent.primaryMessageId);
   assert.deepEqual(transport.counts, { opens: 1, sends: 1, reads: 1, closes: 1 }); assert.deepEqual(f.proofs, [nativeBinding]);
@@ -138,6 +265,41 @@ test("typed pre-dispatch refusal survives actual delivery result reopen and stay
   assert.deepEqual(transport.counts, { opens: 1, sends: 1, reads: 0, closes: 1 });
 });
 
+test("task send stage survives encrypted result cold read without allowing multipart continuation or replay", async t => {
+  for (const diagnostic of ["task-send-rpc", "task-anchor-validation"] as const) {
+  const f = await fixture(t), transport = ticket(f, "unknown", 1), body = "x".repeat(4096);
+  const tagged = { openTaskReply(input: Parameters<typeof transport.value.openTaskReply>[0]) {
+    const lease = transport.value.openTaskReply(input);
+    return { ...lease, transport: { ...lease.transport, async sendOnce(reply: PilotSend, signal: AbortSignal) {
+      try { return await lease.transport.sendOnce(reply, signal); }
+      catch (error) { throw tagPilotTaskSendError(error, diagnostic); }
+    } } };
+  } };
+  const delivered = await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: tagged });
+  assert.deepEqual(delivered.result, { state: "unknown", code: "send-or-readback-unknown", deliveryDiagnostic: diagnostic });
+  const status = await f.inspect();
+  assert.equal(status.storage, "ready"); assert.equal(status.delivery, "unknown"); assert.equal(status.consumed, true);
+  assert.equal(status.verifiedParts, 0); assert.equal(status.nextPart, undefined); assert.deepEqual(status.result, delivered.result);
+  const before = await readFile(join(f.slot, "part-01", "result.enc"));
+  await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: tagged }));
+  assert.deepEqual(await readFile(join(f.slot, "part-01", "result.enc")), before);
+  assert.deepEqual(transport.counts, { opens: 1, sends: 1, reads: 0, closes: 1 });
+  }
+});
+
+test("delivery custody refusal after lease opening records task-preflight UNKNOWN and never enters transport", async t => {
+  const f = await fixture(t), transport = ticket(f);
+  const changed = { openTaskReply(input: Parameters<typeof transport.value.openTaskReply>[0]) {
+    writeFileSync(join(f.directories.analysis, f.binding.intent.taskId, "unexpected-tail.enc"), "synthetic retained tail");
+    return transport.value.openTaskReply(input);
+  } };
+  const delivered = await runStandingHistoryTaskDelivery({ ...f.args, ticket: changed });
+  assert.deepEqual(delivered.result, { state: "unknown", code: "send-or-readback-unknown", deliveryDiagnostic: "task-preflight" });
+  assert.deepEqual(transport.counts, { opens: 1, sends: 0, reads: 0, closes: 1 });
+  const status = await f.inspect(); assert.equal(status.delivery, "unknown"); assert.equal(status.consumed, true);
+  assert.deepEqual(status.result, delivered.result);
+});
+
 test("whole host body plus deterministic footer is bounded without truncation", async t => {
   const f = await fixture(t), body = "Полный текст отчёта";
   const prepared = prepareStandingHistoryTaskDeliveryText({ intent: f.binding.intent, readiness: f.readiness, body });
@@ -151,9 +313,9 @@ test("whole host body plus deterministic footer is bounded without truncation", 
   assert.equal(split.parts.length, 2); assert.equal(split.parts[0]!.text, exact + "x"); assert.equal(split.parts[0]!.kind, "body"); assert.equal(split.parts[1]!.kind, "coverage");
   assert.equal(split.text, split.parts[0]!.text + "\n\n" + split.parts[1]!.text);
   assert.ok(split.parts.every(part => Buffer.byteLength(part.text) <= 4096 && digest(part.text) === part.textHash));
-  assert.throws(() => prepareStandingHistoryTaskDeliveryText({ intent: f.binding.intent, readiness: f.readiness, body: "x".repeat(4097) }));
-  assert.throws(() => prepareStandingHistoryTaskDeliveryText({ intent: f.binding.intent, readiness: f.readiness, body: "я".repeat(4096) }));
-  const transport = ticket(f), result = await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: transport.value });
+  assert.throws(() => prepareStandingHistoryTaskDeliveryText({ intent: f.binding.intent, readiness: f.readiness, body: "x".repeat(32769) }));
+  assert.throws(() => prepareStandingHistoryTaskDeliveryText({ intent: f.binding.intent, readiness: f.readiness, body: "я".repeat(32768) }));
+  const transport = ticket(f), result = await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: transport.value });
   assert.equal(result.descriptor.body, body); assert.equal(transport.sent.text, prepared.text);
 });
 
@@ -342,12 +504,12 @@ test("descriptor replacement while opening the reply lease prevents send and sti
 test("multipart delivery sends one exact part per fresh invocation and becomes verified only after coverage is delivered", async t => {
   const f = await fixture(t), body = "т".repeat(2048), prepared = prepareStandingHistoryTaskDeliveryText({ intent: f.binding.intent, readiness: f.readiness, body });
   const events: StandingOwnActionCaptureEvent[] = [], onOwnAction = (event: StandingOwnActionCaptureEvent) => { events.push(event); throw Error("synthetic observer fault"); };
-  const first = ticket(f, "verified", 1), one = await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: first.value, onOwnAction });
+  const first = ticket(f, "verified", 1), one = await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: first.value, onOwnAction });
   assert.equal(one.partIndex, 1); assert.equal(one.partsTotal, 2); assert.equal(one.deliveryComplete, false); assert.equal(one.result.state, "verified");
   assert.equal(first.sent.text, body); assert.equal(Buffer.byteLength(first.sent.text), 4096); assert.equal(first.counts.sends, 1);
   const intermediate = await f.inspect(); assert.equal(intermediate.delivery, "partial"); assert.equal(intermediate.partsTotal, 2); assert.equal(intermediate.verifiedParts, 1); assert.equal(intermediate.nextPart, 2);
   assert.equal(events.length, 1);
-  const second = ticket(f, "verified", 2), two = await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: second.value, onOwnAction });
+  const second = ticket(f, "verified", 2), two = await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: second.value, onOwnAction });
   assert.equal(two.partIndex, 2); assert.equal(two.partsTotal, 2); assert.equal(two.deliveryComplete, true); assert.equal(two.result.state, "verified");
   assert.equal(second.sent.text, prepared.parts[1]!.text); assert.equal(first.sent.text + "\n\n" + second.sent.text, prepared.text);
   assert.equal(first.sent.replyToMessageId, f.binding.intent.primaryMessageId); assert.equal(second.sent.replyToMessageId, f.binding.intent.primaryMessageId);
@@ -362,68 +524,68 @@ test("multipart delivery sends one exact part per fresh invocation and becomes v
     assert.ok(Object.isFrozen(event)); assert.ok(Object.isFrozen(event.source.record));
   }
   assert.deepEqual(first.counts, { opens: 1, sends: 1, reads: 1, closes: 1 }); assert.deepEqual(second.counts, first.counts);
-  await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, body, ticket: second.value, onOwnAction })); assert.equal(second.counts.sends, 1); assert.equal(events.length, 2);
+  await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: second.value, onOwnAction })); assert.equal(second.counts.sends, 1); assert.equal(events.length, 2);
 });
 
 test("multipart continuation refuses a changed whole body and preserves the first part ciphertext", async t => {
   const f = await fixture(t), body = "x".repeat(4096), first = ticket(f, "verified", 1);
-  await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: first.value });
+  await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: first.value });
   const path = join(f.slot, "part-01", "pilot", "terminal.enc"), before = await readFile(path), second = ticket(f, "verified", 2);
-  await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, body: "y".repeat(4096), ticket: second.value }));
+  await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body: "y".repeat(4096) }, ticket: second.value }));
   assert.equal(second.counts.opens, 0); assert.deepEqual(await readFile(path), before); assert.equal((await f.inspect()).nextPart, 2);
 });
 
 test("empty or UNKNOWN second part halts multipart continuation without resending either part", async t => {
   for (const consumed of ["empty", "unknown"] as const) {
     const f = await fixture(t), body = "x".repeat(4096), first = ticket(f, "verified", 1), second = ticket(f, "unknown", 2);
-    await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: first.value });
+    await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: first.value });
     if (consumed === "empty") await mkdir(join(f.slot, "part-02"));
-    else assert.equal((await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: second.value })).result.state, "unknown");
+    else assert.equal((await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: second.value })).result.state, "unknown");
     const state = await f.inspect(); assert.equal(state.consumed, true); assert.notEqual(state.delivery, "verified"); assert.equal(state.nextPart, undefined);
-    const before = { ...second.counts }; await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, body, ticket: second.value }));
+    const before = { ...second.counts }; await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: second.value }));
     assert.deepEqual(second.counts, before); assert.equal(first.counts.sends, 1);
   }
 });
 
 test("authenticated multipart descriptor alone permits the first absent part after restart", async t => {
   const f = await fixture(t), body = "x".repeat(4096), first = ticket(f, "verified", 1);
-  await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: first.value });
+  await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: first.value });
   // Retain only the real encrypted descriptor to model a crash before any part
   // reservation. This removes only this test's synthetic temporary part image.
   const ownPart = resolve(join(f.slot, "part-01")); assert.equal(ownPart, join(resolve(f.root), "delivery", f.binding.intent.taskId, "part-01"));
   await rm(ownPart, { recursive: true });
   assert.deepEqual(await readdir(f.slot), ["descriptor.enc"]);
   const state = await f.inspect(); assert.equal(state.consumed, true); assert.equal(state.nextPart, 1); assert.equal(state.verifiedParts, 0);
-  const restarted = ticket(f, "verified", 1), result = await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: restarted.value });
+  const restarted = ticket(f, "verified", 1), result = await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: restarted.value });
   assert.equal(result.partIndex, 1); assert.equal(result.deliveryComplete, false); assert.equal(restarted.counts.sends, 1);
 });
 
 test("copying valid first-part ciphertext into second-part slots never proves aggregate delivery", async t => {
   const f = await fixture(t), body = "x".repeat(4096), first = ticket(f, "verified", 1);
-  await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: first.value });
+  await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: first.value });
   const target = join(f.slot, "part-02"); await mkdir(target); await mkdir(join(target, "pilot"));
   for (const name of ["planned.enc", "sending.enc", "terminal.enc"]) await writeFile(join(target, "pilot", name), await readFile(join(f.slot, "part-01", "pilot", name)));
   await writeFile(join(target, "result.enc"), await readFile(join(f.slot, "part-01", "result.enc")));
   const state = await f.inspect(); assert.equal(state.consumed, true); assert.notEqual(state.delivery, "verified"); assert.equal(state.nextPart, undefined);
-  const second = ticket(f, "verified", 2); await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, body, ticket: second.value })); assert.equal(second.counts.opens, 0);
+  const second = ticket(f, "verified", 2); await assert.rejects(runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: second.value })); assert.equal(second.counts.opens, 0);
 });
 
 test("maximum escaped body and objective survive encrypted multipart storage without cropping", async t => {
   const objective = "\u0002".repeat(4096), body = "\u0001".repeat(4096), f = await fixture(t, "observed", objective), first = ticket(f, "verified", 1);
-  const result = await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: first.value });
+  const result = await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: first.value });
   assert.equal(first.sent.text, body); assert.equal(result.descriptor.body, body); assert.equal(result.deliveryComplete, false);
   const cipher = await readFile(join(f.slot, "descriptor.enc"), "utf8"), plain = await decryptSession(cipher, f.binding.passphrase), envelope = JSON.parse(plain);
   assert.ok(Buffer.byteLength(plain) <= 65536); assert.ok(Buffer.byteLength(cipher) <= 98304); assert.equal(envelope.intent.objective, objective);
   assert.equal(Object.hasOwn(envelope.descriptor, "body"), false); assert.equal(Object.hasOwn(envelope.descriptor, "text"), false);
   assert.equal(envelope.descriptor.parts[0].text, body); assert.equal((await f.inspect()).descriptor?.body, body);
-  const second = ticket(f, "verified", 2), completed = await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: second.value });
+  const second = ticket(f, "verified", 2), completed = await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: second.value });
   assert.equal(completed.deliveryComplete, true); assert.equal((await f.inspect()).delivery, "verified");
 });
 
 test("maximum escaped objective and an exactly fitting combined body remain deliverable without cropping", async t => {
   const objective = "\u0002".repeat(4096), f = await fixture(t, "observed", objective), transport = ticket(f);
   const footerBytes = Buffer.byteLength(prepareStandingHistoryTaskDeliveryText({ intent: f.binding.intent, readiness: f.readiness, body: "x" }).text) - 1;
-  const body = "\u0001".repeat(4096 - footerBytes), result = await runStandingHistoryTaskDelivery({ ...f.args, body, ticket: transport.value });
+  const body = "\u0001".repeat(4096 - footerBytes), result = await runStandingHistoryTaskDelivery({ ...f.args, finalReport: { ...f.args.finalReport, body }, ticket: transport.value });
   assert.equal(result.partsTotal, 1); assert.equal(result.deliveryComplete, true); assert.equal(Buffer.byteLength(transport.sent.text), 4096);
   assert.ok(transport.sent.text.startsWith(body)); assert.equal(result.descriptor.body, body);
   const cipher = await readFile(join(f.slot, "descriptor.enc"), "utf8"), plain = await decryptSession(cipher, f.binding.passphrase);

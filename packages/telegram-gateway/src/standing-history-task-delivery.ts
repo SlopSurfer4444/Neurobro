@@ -3,7 +3,7 @@ import type { BigIntStats } from "node:fs";
 import { lstat, mkdir, open, opendir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { types } from "node:util";
-import { assertPilotPrivateDirectory, createEncryptedPilotStore, runPilotReply, isPilotDeliveryDiagnostic, type PilotRecord, type PilotResult, type PilotStore } from "./pilot-outbox.js";
+import { assertPilotPrivateDirectory, createEncryptedPilotStore, runPilotReply, isPilotDeliveryDiagnostic, tagPilotTaskSendError, type PilotRecord, type PilotResult, type PilotStore } from "./pilot-outbox.js";
 import { encryptSession, decryptSession } from "./session-crypto.js";
 import { openStandingHistoryTaskStore, snapshotStandingHistoryTaskIntent, type StandingHistoryTaskIntent, type StandingHistoryTaskStore } from "./standing-history-task-store.js";
 import { openStandingHistoryTaskControlStore, type StandingHistoryTaskControlStore } from "./standing-history-task-control-store.js";
@@ -13,11 +13,13 @@ import type { StandingHistoryAnalysisPlan } from "./standing-history-analysis-pl
 import type { StandingIdleHistoryTicket, StandingTaskReplyLease } from "./standing-conversation-adapter.js";
 import { wrapPilotStore, type StandingOwnActionCaptureObserver } from "./standing-own-action-capture.js";
 import { projectStandingChronicleNote, type StandingChronicleNote } from "./standing-chronicle-note.js";
+import { readStandingHistoryDeliveryRecovery, runStandingHistoryDeliveryRecovery, snapshotStandingHistoryDeliveryRecoveryAuthorization,
+  type StandingHistoryDeliveryRecoveryAuthorization, type StandingHistoryDeliveryRecoveryBinding } from "./standing-history-task-delivery-recovery.js";
 
 export type StandingHistoryTaskReadiness = Extract<StandingHistoryAnalysisPlan, { kind: "analysis-ready" }>;
-export type StandingHistoryTaskDeliveryPart = Readonly<{ index: 1 | 2; kind: "combined" | "body" | "coverage"; text: string; textHash: string }>;
+export type StandingHistoryTaskDeliveryPart = Readonly<{ index: number; kind: "combined" | "body" | "coverage"; text: string; textHash: string }>;
 export type StandingHistoryTaskDeliveryDescriptor = Readonly<{
-  schema: "standing-history-task-delivery-v1" | "standing-history-task-delivery-v2"; taskRef: string; sourceHead: string; analysisHead: string; rootRef: string; rootHash: string;
+  schema: "standing-history-task-delivery-v1" | "standing-history-task-delivery-v2" | "standing-history-task-delivery-v3"; taskRef: string; sourceHead: string; analysisHead: string; rootRef: string; rootHash: string;
   body: string; text: string; textHash: string; coverage: StandingHistoryTaskReadiness["coverage"]; gaps: StandingHistoryTaskReadiness["gaps"];
   parts?: readonly StandingHistoryTaskDeliveryPart[];
 }>;
@@ -25,10 +27,20 @@ export type StandingHistoryTaskDeliveryStatus = Readonly<{
   storage: "absent" | "ready" | "unavailable"; consumed: boolean;
   delivery: "not-attempted" | "not-inspected" | "unknown" | "verified" | "failed-terminal" | "partial";
   descriptor?: StandingHistoryTaskDeliveryDescriptor; result?: PilotResult; leaseJoined?: true;
-  partsTotal?: 2; verifiedParts?: number; nextPart?: 1 | 2;
+  partsTotal?: number; verifiedParts?: number; nextPart?: number;
+}>;
+/** Host-admitted user-facing report, distinct from internal analysis notes.
+ * The host must synthesize/review it against the objective; these bindings
+ * establish identity, not semantic quality. */
+export type StandingHistoryFinalReport = Readonly<{
+  schema: "standing-history-final-report-v1";
+  taskRef: string; sourceHead: string; analysisHead: string; body: string;
 }>;
 export type StandingHistoryTaskDeliveryInput = Readonly<{
-  intent: StandingHistoryTaskIntent; readiness: StandingHistoryTaskReadiness; body?: string;
+  intent: StandingHistoryTaskIntent; readiness: StandingHistoryTaskReadiness;
+  finalReport?: StandingHistoryFinalReport;
+  /** Legacy body can reconcile an existing descriptor, never initiate delivery. */
+  body?: string;
   directories: Readonly<{ pages: string; control: string; analysis: string; attempts: string; delivery: string }>;
   passphrase: string; ticket: Pick<StandingIdleHistoryTicket, "openTaskReply">; signal: AbortSignal;
   verifyOwnerReady(binding: StandingHistoryAnalysisNativeBinding): Promise<unknown>;
@@ -37,19 +49,20 @@ export type StandingHistoryTaskDeliveryInput = Readonly<{
   onOwnAction?: StandingOwnActionCaptureObserver;
 }>;
 export class StandingHistoryTaskDeliveryError extends Error {
-  constructor(readonly code: "input" | "coverage" | "overflow" | "stale" | "cancelled" | "consumed" | "storage" | "owner" | "close") {
+  constructor(readonly code: "input" | "coverage" | "overflow" | "stale" | "cancelled" | "consumed" | "storage" | "owner" | "close" | "report-required") {
     super("STANDING_HISTORY_TASK_DELIVERY_" + code.toUpperCase());
   }
 }
 const fail = (code: StandingHistoryTaskDeliveryError["code"]): never => { throw new StandingHistoryTaskDeliveryError(code); };
 // V1 retains body and full text; with a 4096-byte intent objective, valid
 // control characters can expand all three strings sixfold in JSON. These are
-// disk-envelope bounds; each actual Telegram part still has a 4096-byte cap.
-const DOMAIN = "DecadansNeurobro/standing-history-task-delivery/v1", MAX_CIPHER = 131072;
+// V3 stores one copy of up to 32KiB report text in parts; JSON escaping plus
+// the objective/metadata stays below 256KiB. Each Telegram part remains 4096B.
+const DOMAIN = "DecadansNeurobro/standing-history-task-delivery/v1", MAX_CIPHER = 393216, MAX_PARTS = 16, MAX_REPORT_BYTES = 32768;
 const sha = (v: string) => createHash("sha256").update(v, "utf8").digest("hex");
 const digest = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
 const count = (v: unknown, max = 102400): v is number => Number.isSafeInteger(v) && Number(v) >= 0 && Number(v) <= max;
-const validText = (v: unknown): v is string => typeof v === "string" && v.length <= 4096 && !!v.trim() && !v.includes("\0") && Buffer.from(v).toString() === v;
+const validText = (v: unknown, maximum = 4096): v is string => typeof v === "string" && v.length <= maximum && !!v.trim() && !v.includes("\0") && Buffer.from(v).toString() === v;
 const sameDirectory = (a: BigIntStats, b: BigIntStats) => a.dev === b.dev && a.ino === b.ino;
 const stamp = (s: BigIntStats) => [s.dev, s.ino, s.size, s.mtimeNs, s.ctimeNs, s.nlink].join(":");
 function data(v: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
@@ -96,17 +109,52 @@ function readyCopy(value: unknown): StandingHistoryTaskReadiness {
   return Object.freeze({ kind: "analysis-ready", sourceHead: r.sourceHead, expectedHead: r.expectedHead, ...(r.rootRef ? { rootRef: r.rootRef as string } : {}),
     coverage: Object.freeze({ ...c, excluded: Object.freeze(e) }) as StandingHistoryTaskReadiness["coverage"], gaps: Object.freeze(gaps) });
 }
+const partDirectory = (index: number) => "part-" + String(index).padStart(2, "0");
+/** Preserve every UTF-8 byte, preferring paragraph/line boundaries near the end
+ * of each message. Never split a code point or trim whitespace. */
+function splitReportBody(body: string): string[] {
+  const chunks: string[] = []; let remaining = body;
+  while (Buffer.byteLength(remaining) > 4096) {
+    const bytes = Buffer.from(remaining); let end = 4096;
+    while ((bytes[end]! & 0xc0) === 0x80) end--;
+    let chunk = bytes.subarray(0, end).toString("utf8");
+    for (const delimiter of ["\n\n", "\n"]) {
+      const at = chunk.lastIndexOf(delimiter);
+      if (at >= 0 && Buffer.byteLength(chunk.slice(0, at + delimiter.length)) >= 3072) {
+        chunk = chunk.slice(0, at + delimiter.length); break;
+      }
+    }
+    // Telegram cannot send a whitespace-only message. Keep an ordinary final
+    // newline/space suffix attached to a real character rather than rejecting
+    // a valid report at an otherwise exact 4096-byte boundary. A whitespace
+    // run too large to attach losslessly is refused before any descriptor.
+    if (!remaining.slice(chunk.length).trim()) {
+      const tailStart = /\S\s*$/u.exec(chunk)?.index;
+      if (tailStart === undefined || tailStart === 0 || Buffer.byteLength(remaining.slice(tailStart)) > 4096) return fail("input");
+      chunk = chunk.slice(0, tailStart);
+    }
+    if (!validText(chunk)) return fail("input");
+    chunks.push(chunk); remaining = remaining.slice(chunk.length);
+  }
+  if (!validText(remaining)) return fail("input");
+  chunks.push(remaining); return chunks;
+}
 /** Exact host-selected body plus mandatory coverage disclosure. No truncation,
  * model invocation, semantic-truth claim, or send authority is produced here. */
 export function prepareStandingHistoryTaskDeliveryText(value: Readonly<{ intent: StandingHistoryTaskIntent; readiness: StandingHistoryTaskReadiness; body: string }>): Readonly<{ text: string; textHash: string; parts: readonly StandingHistoryTaskDeliveryPart[] }> {
   const v = data(value, ["intent", "readiness", "body"]), intent = snapshotStandingHistoryTaskIntent(v.intent), readiness = readyCopy(v.readiness);
-  if (!validText(v.body) || Buffer.byteLength(v.body) > 4096) return fail("input");
+  if (!validText(v.body, MAX_REPORT_BYTES) || Buffer.byteLength(v.body) > MAX_REPORT_BYTES) return fail("input");
   const c = readiness.coverage, gaps = readiness.gaps.map(g => gapLabels[g.kind] + (g.count === undefined ? "" : ": " + g.count)).join("; ");
   const footer = `Охват: ${c.coveredRows}/${c.sourceRows} записей, ${c.coveredPages}/${c.committedPages} страниц; ${new Date(intent.fromDate * 1000).toISOString()} — ${new Date(intent.toDate * 1000).toISOString()} (${intent.timezone}).\nИстория: ${c.readTraversalComplete ? "обход завершён" : "полнота не подтверждена"}. Пробелы: ${gaps || "не отмечены"}. Сводка модели; утверждения не проверены.`;
   if (Buffer.byteLength(footer) > 4096) return fail("overflow");
-  const text = v.body + "\n\n" + footer;
-  const part = (index: 1 | 2, kind: StandingHistoryTaskDeliveryPart["kind"], text: string): StandingHistoryTaskDeliveryPart => Object.freeze({ index, kind, text, textHash: sha(text) });
-  const parts = Buffer.byteLength(text) <= 4096 ? [part(1, "combined", text)] : [part(1, "body", v.body), part(2, "coverage", footer)];
+  const sourceFooter = (intent.source ? "Источник: подключённое сообщество (только чтение).\n" : "") + footer;
+  const text = v.body + "\n\n" + sourceFooter;
+  const part = (index: number, kind: StandingHistoryTaskDeliveryPart["kind"], text: string): StandingHistoryTaskDeliveryPart => Object.freeze({ index, kind, text, textHash: sha(text) });
+  if (Buffer.byteLength(sourceFooter) > 4096) return fail("overflow");
+  const chunks = splitReportBody(v.body);
+  const parts = Buffer.byteLength(text) <= 4096 ? [part(1, "combined", text)] :
+    [...chunks.map((chunk, index) => part(index + 1, "body", chunk)), part(chunks.length + 1, "coverage", sourceFooter)];
+  if (parts.length > MAX_PARTS) return fail("overflow");
   // Aggregate text/hash retain the exact body + separator + footer even when
   // that aggregate is not sent as one message. Each sent part has its own hash.
   return Object.freeze({ text, textHash: sha(text), parts: Object.freeze(parts) });
@@ -114,11 +162,11 @@ export function prepareStandingHistoryTaskDeliveryText(value: Readonly<{ intent:
 function descriptorCopy(value: unknown, intent: StandingHistoryTaskIntent): StandingHistoryTaskDeliveryDescriptor {
   const d = data(value, ["schema", "taskRef", "sourceHead", "analysisHead", "rootRef", "rootHash", "body", "text", "textHash", "coverage", "gaps"], ["parts"]);
   const readiness = readyCopy({ kind: "analysis-ready", sourceHead: d.sourceHead, expectedHead: d.analysisHead, rootRef: d.rootRef, coverage: d.coverage, gaps: d.gaps });
-  if (!["standing-history-task-delivery-v1", "standing-history-task-delivery-v2"].includes(d.schema as string) || d.taskRef !== intent.taskId || !digest(d.rootHash) || !validText(d.body)) return fail("input");
+  if (!["standing-history-task-delivery-v1", "standing-history-task-delivery-v2", "standing-history-task-delivery-v3"].includes(d.schema as string) || d.taskRef !== intent.taskId || !digest(d.rootHash) || !validText(d.body, MAX_REPORT_BYTES)) return fail("input");
   const prepared = prepareStandingHistoryTaskDeliveryText({ intent, readiness, body: d.body });
   if (d.text !== prepared.text || d.textHash !== prepared.textHash || d.rootHash !== d.analysisHead) return fail("input");
-  const multipart = d.schema === "standing-history-task-delivery-v2";
-  if (multipart ? prepared.parts.length !== 2 || !equal(array(d.parts, 2).map(p => data(p, ["index", "kind", "text", "textHash"])), prepared.parts)
+  const multipart = d.schema !== "standing-history-task-delivery-v1";
+  if (multipart ? (d.schema === "standing-history-task-delivery-v2" ? prepared.parts.length !== 2 : prepared.parts.length < 3) || !equal(array(d.parts, MAX_PARTS).map(p => data(p, ["index", "kind", "text", "textHash"])), prepared.parts)
     : prepared.parts.length !== 1 || Object.hasOwn(d, "parts")) return fail("input");
   return Object.freeze({ schema: d.schema as StandingHistoryTaskDeliveryDescriptor["schema"], taskRef: intent.taskId, sourceHead: readiness.sourceHead, analysisHead: readiness.expectedHead,
     rootRef: readiness.rootRef!, rootHash: d.rootHash, body: d.body, text: prepared.text, textHash: prepared.textHash, coverage: readiness.coverage, gaps: readiness.gaps,
@@ -131,10 +179,10 @@ function persistedDescriptor(descriptor: StandingHistoryTaskDeliveryDescriptor):
 function storedDescriptor(value: unknown, intent: StandingHistoryTaskIntent): StandingHistoryTaskDeliveryDescriptor {
   const d = data(value, ["schema", "taskRef", "sourceHead", "analysisHead", "rootRef", "rootHash", "coverage", "gaps"], ["body", "text", "textHash", "parts"]);
   if (d.schema === "standing-history-task-delivery-v1") return descriptorCopy(d, intent);
-  if (d.schema !== "standing-history-task-delivery-v2" || ["body", "text", "textHash"].some(k => Object.hasOwn(d, k))) return fail("input");
-  const parts = array(d.parts, 2).map(p => data(p, ["index", "kind", "text", "textHash"]));
-  if (parts.length !== 2 || !validText(parts[0]!.text) || !validText(parts[1]!.text)) return fail("input");
-  const body = parts[0]!.text, text = body + "\n\n" + parts[1]!.text;
+  if (!["standing-history-task-delivery-v2", "standing-history-task-delivery-v3"].includes(d.schema as string) || ["body", "text", "textHash"].some(k => Object.hasOwn(d, k))) return fail("input");
+  const parts = array(d.parts, MAX_PARTS).map(p => data(p, ["index", "kind", "text", "textHash"]));
+  if (parts.length < 2 || parts.some(part => !validText(part.text) || Buffer.byteLength(part.text as string) > 4096)) return fail("input");
+  const body = parts.slice(0, -1).map(part => part.text as string).join(""), text = body + "\n\n" + parts.at(-1)!.text;
   return descriptorCopy({ ...d, parts, body, text, textHash: sha(text) }, intent);
 }
 const descriptorHash = (descriptor: StandingHistoryTaskDeliveryDescriptor) => sha(canonical(persistedDescriptor(descriptor)));
@@ -163,7 +211,7 @@ async function readFile(path: string, guard: () => Promise<void>, versions?: Map
   versions?.set(path, stamp(before)); await guard(); return bytes.toString();
 }
 async function writeFile(path: string, value: unknown, passphrase: string, guard: () => Promise<void>): Promise<BigIntStats> {
-  const plain = canonical(value); if (Buffer.byteLength(plain) > 81920) return fail("storage");
+  const plain = canonical(value); if (Buffer.byteLength(plain) > 262144) return fail("storage");
   const cipher = await encryptSession(plain, passphrase); if (Buffer.byteLength(cipher) > MAX_CIPHER) return fail("storage"); await guard();
   const file = await open(path, "wx", 0o600); let written: BigIntStats;
   try { await file.writeFile(cipher, "utf8"); await file.sync(); written = await file.stat({ bigint: true }); } finally { await file.close(); }
@@ -171,12 +219,13 @@ async function writeFile(path: string, value: unknown, passphrase: string, guard
   return written;
 }
 function pilotRecord(value: unknown, descriptor: Pick<StandingHistoryTaskDeliveryDescriptor, "text" | "textHash">, intent: StandingHistoryTaskIntent): PilotRecord {
-  const p = data(value, ["version", "state", "idempotencyKey", "randomId", "chatId", "accountId", "replyToMessageId", "contentHash", "textBytes"], ["messageId"]);
+  const p = data(value, ["version", "state", "idempotencyKey", "randomId", "chatId", "accountId", "replyToMessageId", "contentHash", "textBytes"], ["messageId", "wireReplyToMessageId"]);
   const key = sha(JSON.stringify([intent.chatId, "owner-prompt", intent.primaryMessageId, "reply", descriptor.textHash]));
   if (p.version !== "pilot-outbox-v1" || !["planned", "sending", "verified", "unknown", "failed_terminal"].includes(p.state as string) || p.idempotencyKey !== key ||
       typeof p.randomId !== "string" || !/^[1-9][0-9]{0,18}$/.test(p.randomId) || BigInt(p.randomId) > 9223372036854775807n || p.chatId !== intent.chatId || p.accountId !== intent.accountId ||
       p.replyToMessageId !== intent.primaryMessageId || p.contentHash !== descriptor.textHash || p.textBytes !== Buffer.byteLength(descriptor.text) ||
-      (p.state === "verified" ? !count(p.messageId, 2147483647) || p.messageId === 0 : Object.hasOwn(p, "messageId"))) return fail("storage");
+      (p.state === "verified" ? !count(p.messageId, 2147483647) || p.messageId === 0 : Object.hasOwn(p, "messageId")) ||
+      Object.hasOwn(p, "wireReplyToMessageId") && (p.state !== "verified" || p.wireReplyToMessageId !== null)) return fail("storage");
   return Object.freeze(p) as PilotRecord;
 }
 async function decryptPilot(value: string, passphrase: string): Promise<unknown> {
@@ -202,7 +251,17 @@ function resultCopy(value: unknown): PilotResult {
  * A verified pilot terminal can recover the delivery fact without a result
  * receipt; it cannot recover the missing lease-join fact. Missing/partial proof
  * never permits another send, even with a changed body. */
-export async function readStandingHistoryTaskDelivery(value: Readonly<{ directory: string; passphrase: string; intent: StandingHistoryTaskIntent; signal?: AbortSignal }>): Promise<StandingHistoryTaskDeliveryStatus> {
+type DeliveryReadInput = Readonly<{ directory: string; passphrase: string; intent: StandingHistoryTaskIntent; signal?: AbortSignal }>;
+export async function readStandingHistoryTaskDelivery(value: DeliveryReadInput): Promise<StandingHistoryTaskDeliveryStatus> { return readDelivery(value); }
+/** Read-only operator inspection; this identity is not send authority. */
+export async function inspectStandingHistoryTaskDeliveryRecovery(value: DeliveryReadInput & Readonly<{ partIndex: number }>): Promise<StandingHistoryDeliveryRecoveryBinding | undefined> {
+  const v = data(value, ["directory", "passphrase", "intent", "partIndex"], ["signal"]);
+  if (!count(v.partIndex, MAX_PARTS) || v.partIndex === 0) return fail("input");
+  const { partIndex, ...read } = v; let candidate: StandingHistoryDeliveryRecoveryBinding | undefined;
+  const status = await readDelivery(read as DeliveryReadInput, binding => { if (binding.partIndex === partIndex) candidate = binding; });
+  return status.storage === "ready" ? candidate : undefined;
+}
+async function readDelivery(value: DeliveryReadInput, candidate?: (binding: StandingHistoryDeliveryRecoveryBinding) => void): Promise<StandingHistoryTaskDeliveryStatus> {
   const v = data(value, ["directory", "passphrase", "intent"], ["signal"]), c = config(v.directory, v.passphrase), intent = snapshotStandingHistoryTaskIntent(v.intent);
   const signal = Object.hasOwn(v, "signal") ? signalCopy(v.signal) : undefined;
   const empty = Object.freeze({ storage: "absent", consumed: false, delivery: "not-attempted" }) as StandingHistoryTaskDeliveryStatus;
@@ -214,26 +273,29 @@ export async function readStandingHistoryTaskDelivery(value: Readonly<{ director
     const guard = async () => { await checkDirectory(c.directory, parent); await checkDirectory(slot, own);
       for (const [path, identity] of directoryVersions) await checkDirectory(path, identity);
       for (const [path, version] of versions) if (stamp(await lstat(path, { bigint: true })) !== version) return fail("storage"); };
-    const names = await boundedNames(slot, 3);
+    const names = await boundedNames(slot, MAX_PARTS + 1);
     if (!names.includes("descriptor.enc")) return Object.freeze({ storage: "unavailable", consumed: true, delivery: "not-inspected" });
     const envelope = data(JSON.parse(await decryptSession(await readFile(join(slot, "descriptor.enc"), guard, versions), c.passphrase)), ["domain", "kind", "intent", "descriptor"]);
     if (envelope.domain !== DOMAIN || envelope.kind !== "descriptor" || !equal(snapshotStandingHistoryTaskIntent(envelope.intent), intent)) return fail("storage");
-    const descriptor = storedDescriptor(envelope.descriptor, intent), multipart = descriptor.schema === "standing-history-task-delivery-v2";
-    if (names.some(n => !(multipart ? ["descriptor.enc", "part-01", "part-02"] : ["descriptor.enc", "pilot", "result.enc"]).includes(n))) return fail("storage");
+    const descriptor = storedDescriptor(envelope.descriptor, intent), multipart = descriptor.schema !== "standing-history-task-delivery-v1";
+    if (names.some(n => !(multipart ? ["descriptor.enc", ...descriptor.parts!.map(part => partDirectory(part.index))] : ["descriptor.enc", "pilot", "result.enc", "recovery-v1"]).includes(n))) return fail("storage");
     async function readPart(base: string, part?: StandingHistoryTaskDeliveryPart) {
-      const partNames = base === slot ? names : await boundedNames(base, 2);
-      if (base !== slot && partNames.some(n => !["pilot", "result.enc"].includes(n))) return fail("storage");
+      const partNames = base === slot ? names : await boundedNames(base, 3);
+      if (base !== slot && partNames.some(n => !["pilot", "result.enc", "recovery-v1"].includes(n))) return fail("storage");
       const expectedText = part ?? descriptor, pilotKey = part ? partPassphrase(c.passphrase, intent, descriptor, part.index) : c.passphrase;
-      let terminal: PilotRecord | undefined;
+      let terminal: PilotRecord | undefined, planned: PilotRecord | undefined, sending = false;
+      const originalFiles: Record<string, string> = {};
       if (partNames.includes("pilot")) {
         const path = join(base, "pilot"); directoryVersions.set(path, await pinnedDirectory(path));
         const files = await boundedNames(path, 3); if (files.some(n => !["planned.enc", "sending.enc", "terminal.enc"].includes(n))) return fail("storage");
-        if (files.length && !files.includes("planned.enc")) return fail("storage"); let planned: PilotRecord | undefined;
+        if (files.length && !files.includes("planned.enc")) return fail("storage");
         for (const name of ["planned.enc", "sending.enc", "terminal.enc"]) if (files.includes(name)) {
-          const record = pilotRecord(await decryptPilot(await readFile(join(path, name), guard, versions), pilotKey), expectedText, intent);
+          const cipher = await readFile(join(path, name), guard, versions); originalFiles[name] = sha(cipher);
+          const record = pilotRecord(await decryptPilot(cipher, pilotKey), expectedText, intent);
           if (name === "planned.enc") { if (record.state !== "planned") return fail("storage"); planned = record; }
           else {
             if (!planned || record.randomId !== planned.randomId || name === "sending.enc" && record.state !== "sending") return fail("storage");
+            if (name === "sending.enc") sending = true;
             if (name === "terminal.enc") { if (!["verified", "unknown", "failed_terminal"].includes(record.state) || record.state !== "failed_terminal" && !files.includes("sending.enc")) return fail("storage"); terminal = record; }
           }
         }
@@ -241,12 +303,31 @@ export async function readStandingHistoryTaskDelivery(value: Readonly<{ director
       }
       let result: PilotResult | undefined, leaseJoined: true | undefined;
       if (partNames.includes("result.enc")) {
-        const receipt = data(JSON.parse(await decryptSession(await readFile(join(base, "result.enc"), guard, versions), c.passphrase)), ["domain", "kind", "taskId", "intentHash", "descriptorHash", "result", "leaseJoined"], part ? ["partIndex"] : []);
+        const cipher = await readFile(join(base, "result.enc"), guard, versions); originalFiles["result.enc"] = sha(cipher);
+        const receipt = data(JSON.parse(await decryptSession(cipher, c.passphrase)), ["domain", "kind", "taskId", "intentHash", "descriptorHash", "result", "leaseJoined"], part ? ["partIndex"] : []);
         if (receipt.domain !== DOMAIN || receipt.kind !== "result" || receipt.taskId !== intent.taskId || receipt.intentHash !== sha(canonical(intent)) || receipt.descriptorHash !== descriptorHash(descriptor) || receipt.leaseJoined !== true || part && receipt.partIndex !== part.index) return fail("storage");
         result = resultCopy(receipt.result); leaseJoined = true;
         if (result.state === "verified" && terminal?.state !== "verified" || result.state === "failed_terminal" && terminal?.state !== "failed_terminal" || result.state === "refused" && terminal?.state === "verified") return fail("storage");
       }
-      await guard(); if (!equal((await boundedNames(base, base === slot ? 3 : 2)).sort(), partNames.sort())) return fail("storage");
+      const binding: StandingHistoryDeliveryRecoveryBinding | undefined = planned && sending && terminal?.state === "unknown" && result?.state === "unknown" && leaseJoined === true ? Object.freeze({
+        taskRef: intent.taskId, intentHash: sha(canonical(intent)), descriptorHash: descriptorHash(descriptor), partIndex: part?.index ?? 1,
+        originalRecordsHash: sha(canonical(originalFiles)), idempotencyKey: planned.idempotencyKey, randomId: planned.randomId,
+        accountId: intent.accountId, chatId: intent.chatId, replyToMessageId: intent.primaryMessageId, contentHash: expectedText.textHash, textBytes: Buffer.byteLength(expectedText.text) }) : undefined;
+      if (binding) candidate?.(binding);
+      if (partNames.includes("recovery-v1")) {
+        if (!binding) return fail("storage");
+        const recoveryPath = join(base, "recovery-v1"); directoryVersions.set(recoveryPath, await pinnedDirectory(recoveryPath));
+        // Keep the receipt files pinned through the whole outer multipart read,
+        // including later parts, rather than only while its helper is active.
+        const recoveryNames = await boundedNames(recoveryPath, 3);
+        for (const name of recoveryNames) await readFile(join(recoveryPath, name), guard, versions);
+        const recovered = await readStandingHistoryDeliveryRecovery({ directory: recoveryPath, passphrase: pilotKey, binding, guard });
+        if (!equal((await boundedNames(recoveryPath, 3)).sort(), recoveryNames.sort())) return fail("storage");
+        if (recovered) { result = { state: "verified", code: "verified" }; leaseJoined = true;
+          terminal = { ...planned!, state: "verified", messageId: recovered.messageId,
+            ...(recovered.wireReplyToMessageId === null ? { wireReplyToMessageId: null } : {}) }; }
+      }
+      await guard(); if (!equal((await boundedNames(base, base === slot ? 4 : 3)).sort(), partNames.sort())) return fail("storage");
       const delivery = result?.state === "unknown" ? "unknown" : terminal?.state === "verified" ? "verified" : terminal?.state === "failed_terminal" ? "failed-terminal" : "unknown";
       return { delivery, result, leaseJoined };
     }
@@ -256,26 +337,26 @@ export async function readStandingHistoryTaskDelivery(value: Readonly<{ director
       output = { storage: "ready", consumed: true, delivery: part.delivery as StandingHistoryTaskDeliveryStatus["delivery"], descriptor,
         ...(part.result ? { result: part.result } : {}), ...(part.leaseJoined ? { leaseJoined: true } : {}) };
     } else {
-      let verifiedParts = 0, nextPart: 1 | 2 | undefined, result: PilotResult | undefined, allJoined = true;
+      let verifiedParts = 0, nextPart: number | undefined, result: PilotResult | undefined, allJoined = true;
       let delivery: StandingHistoryTaskDeliveryStatus["delivery"] = "partial";
       for (const part of descriptor.parts!) {
-        const name = "part-0" + part.index, path = join(slot, name);
+        const name = partDirectory(part.index), path = join(slot, name);
         if (!names.includes(name)) {
-          if (part.index === 1 && names.includes("part-02")) return fail("storage");
+          if (descriptor.parts!.some(later => later.index > part.index && names.includes(partDirectory(later.index)))) return fail("storage");
           if (verifiedParts === part.index - 1) nextPart = part.index;
           break;
         }
         if (verifiedParts !== part.index - 1) return fail("storage");
         directoryVersions.set(path, await pinnedDirectory(path));
         const saved = await readPart(path, part); result = saved.result; allJoined &&= saved.leaseJoined === true;
-        if (saved.delivery !== "verified") { delivery = saved.delivery as StandingHistoryTaskDeliveryStatus["delivery"]; if (part.index === 1 && names.includes("part-02")) return fail("storage"); break; }
+        if (saved.delivery !== "verified") { delivery = saved.delivery as StandingHistoryTaskDeliveryStatus["delivery"]; if (descriptor.parts!.some(later => later.index > part.index && names.includes(partDirectory(later.index)))) return fail("storage"); break; }
         verifiedParts++;
       }
-      if (verifiedParts === 2) delivery = "verified";
-      output = { storage: "ready", consumed: true, delivery, descriptor, partsTotal: 2, verifiedParts,
-        ...(nextPart ? { nextPart } : {}), ...(result ? { result } : {}), ...(verifiedParts === 2 && allJoined ? { leaseJoined: true } : {}) };
+      if (verifiedParts === descriptor.parts!.length) delivery = "verified";
+      output = { storage: "ready", consumed: true, delivery, descriptor, partsTotal: descriptor.parts!.length, verifiedParts,
+        ...(nextPart ? { nextPart } : {}), ...(result ? { result } : {}), ...(verifiedParts === descriptor.parts!.length && allJoined ? { leaseJoined: true } : {}) };
     }
-    await guard(); if (!equal((await boundedNames(slot, 3)).sort(), names.sort())) return fail("storage"); if (signal?.aborted) return fail("cancelled");
+    await guard(); if (!equal((await boundedNames(slot, MAX_PARTS + 1)).sort(), names.sort())) return fail("storage"); if (signal?.aborted) return fail("cancelled");
     return Object.freeze(output);
   } catch { return Object.freeze({ storage: "unavailable", consumed: true, delivery: "not-inspected" }); }
 }
@@ -365,10 +446,14 @@ export async function readStandingDeliveredChronicleNote(value: StandingDelivere
  * this invocation's part; only deliveryComplete describes the entire task.
  * The original requester/primary
  * remain fixed by intent and by the sole adapter's task-reply lease. */
-export async function runStandingHistoryTaskDelivery(value: StandingHistoryTaskDeliveryInput): Promise<Readonly<{
-  descriptor: StandingHistoryTaskDeliveryDescriptor; result: PilotResult; leaseJoined: true; partIndex: 1 | 2; partsTotal: 1 | 2; deliveryComplete: boolean;
-}>> {
-  const v = data(value, ["intent", "readiness", "directories", "passphrase", "ticket", "signal", "verifyOwnerReady"], ["body", "onOwnAction"]);
+type DeliveryRunResult = Readonly<{
+  descriptor: StandingHistoryTaskDeliveryDescriptor; result: PilotResult; leaseJoined: true; partIndex: number; partsTotal: number; deliveryComplete: boolean;
+}>;
+export async function runStandingHistoryTaskDelivery(value: StandingHistoryTaskDeliveryInput): Promise<DeliveryRunResult> { return deliver(value, false); }
+/** Host-only explicit maintenance entry. Ordinary delivery never starts recovery. */
+export async function recoverStandingHistoryTaskDelivery(value: StandingHistoryTaskDeliveryInput & Readonly<{ maintenance: StandingHistoryDeliveryRecoveryAuthorization }>): Promise<DeliveryRunResult> { return deliver(value, true); }
+async function deliver(value: StandingHistoryTaskDeliveryInput, recovering: boolean): Promise<DeliveryRunResult> {
+  const v = data(value, ["intent", "readiness", "directories", "passphrase", "ticket", "signal", "verifyOwnerReady", ...(recovering ? ["maintenance"] : [])], ["body", "finalReport", "onOwnAction"]);
   if (Object.hasOwn(v, "onOwnAction") && (typeof v.onOwnAction !== "function" || types.isProxy(v.onOwnAction) || types.isAsyncFunction(v.onOwnAction) || types.isGeneratorFunction(v.onOwnAction))) return fail("input");
   const onOwnAction = v.onOwnAction as StandingOwnActionCaptureObserver | undefined;
   const intent = snapshotStandingHistoryTaskIntent(v.intent), readiness = readyCopy(v.readiness), dirs = data(v.directories, ["pages", "control", "analysis", "attempts", "delivery"]);
@@ -377,7 +462,15 @@ export async function runStandingHistoryTaskDelivery(value: StandingHistoryTaskD
   for (const [i, a] of Object.values(directories).entries()) for (const b of Object.values(directories).slice(i + 1)) {
     for (const [x, y] of [[a, b], [b, a]]) { const r = relative(x!, y!); if (!r || !isAbsolute(r) && r !== ".." && !r.startsWith(".." + sep)) return fail("input"); }
   }
-  if (Object.hasOwn(v, "body") && (!validText(v.body) || Buffer.byteLength(v.body) > 4096)) return fail("input"); const body = v.body as string | undefined;
+  if (Object.hasOwn(v, "body") && (!validText(v.body, MAX_REPORT_BYTES) || Buffer.byteLength(v.body) > MAX_REPORT_BYTES)) return fail("input"); const body = v.body as string | undefined;
+  let finalReport: StandingHistoryFinalReport | undefined;
+  if (Object.hasOwn(v, "finalReport")) {
+    const report = data(v.finalReport, ["schema", "taskRef", "sourceHead", "analysisHead", "body"]);
+    if (report.schema !== "standing-history-final-report-v1" || !validText(report.body, MAX_REPORT_BYTES) || Buffer.byteLength(report.body) > MAX_REPORT_BYTES) return fail("input");
+    if (report.taskRef !== intent.taskId || report.sourceHead !== readiness.sourceHead || report.analysisHead !== readiness.expectedHead) return fail("stale");
+    if (body !== undefined && body !== report.body) return fail("input");
+    finalReport = Object.freeze(report) as StandingHistoryFinalReport;
+  }
   const signal = signalCopy(v.signal), openReply = method<StandingIdleHistoryTicket["openTaskReply"]>(v.ticket, "openTaskReply"), verifyOwnerReady = method<StandingHistoryTaskDeliveryInput["verifyOwnerReady"]>(value, "verifyOwnerReady");
   let passphrase = v.passphrase as string, source: StandingHistoryTaskStore | undefined, control: StandingHistoryTaskControlStore | undefined, analysis: StandingHistoryAnalysisStore | undefined, attempts: StandingHistoryAnalysisAttemptStore | undefined;
   let closeReply: (() => Promise<void>) | undefined, closingReply: Promise<void> | undefined;
@@ -391,11 +484,25 @@ export async function runStandingHistoryTaskDelivery(value: StandingHistoryTaskD
   try {
     live(); const parent = await pinnedDirectory(directories.delivery), slot = join(directories.delivery, intent.taskId);
     let existing: StandingHistoryTaskDeliveryStatus | undefined, existingOwn: BigIntStats | undefined;
+    let recoveryBinding: StandingHistoryDeliveryRecoveryBinding | undefined, recoveryAuthorization: StandingHistoryDeliveryRecoveryAuthorization | undefined;
     if (!await absent(slot)) {
       existingOwn = await pinnedDirectory(slot);
       existing = await readStandingHistoryTaskDelivery({ directory: directories.delivery, passphrase, intent, signal });
-      if (existing.storage !== "ready" || existing.descriptor?.schema !== "standing-history-task-delivery-v2" || !existing.nextPart) return fail("consumed");
+      if (recovering) {
+        const authorization = data(v.maintenance, ["schema", "binding", "ownerReceiptHash"]), bound = data(authorization.binding,
+          ["taskRef", "intentHash", "descriptorHash", "partIndex", "originalRecordsHash", "idempotencyKey", "randomId", "accountId", "chatId", "replyToMessageId", "contentHash", "textBytes"]);
+        if (!count(bound.partIndex, MAX_PARTS) || bound.partIndex === 0 || existing.storage !== "ready" || existing.delivery !== "unknown") return fail("consumed");
+        recoveryBinding = await inspectStandingHistoryTaskDeliveryRecovery({ directory: directories.delivery, passphrase, intent, signal, partIndex: bound.partIndex as number });
+        if (!recoveryBinding) return fail("consumed");
+        recoveryAuthorization = snapshotStandingHistoryDeliveryRecoveryAuthorization(v.maintenance, recoveryBinding);
+        const recoveryBase = existing.descriptor?.schema === "standing-history-task-delivery-v1" ? slot : join(slot, partDirectory(recoveryBinding.partIndex));
+        if (!await absent(join(recoveryBase, "recovery-v1"))) return fail("consumed");
+      } else if (existing.storage !== "ready" || existing.descriptor?.schema === "standing-history-task-delivery-v1" || !existing.nextPart) return fail("consumed");
     }
+    if (recovering && !recoveryBinding) return fail("consumed");
+    // No slot or transport lease is created for an internal analysis note.
+    // Existing multipart recovery retains its descriptor and replay boundaries.
+    if (!existing && !finalReport) return fail("report-required");
     control = await openStandingHistoryTaskControlStore({ directory: directories.control, passphrase, intent, mode: "open" });
     const queued = async () => { await control!.status(); const fresh = await openStandingHistoryTaskControlStore({ directory: directories.control, passphrase, intent, mode: "open" });
       try { const c = await fresh.status(); await control!.status(); if (c.storage !== "ready") return fail("stale"); if (c.state !== "queued") return fail("cancelled"); return c; } finally { await fresh.close(); } };
@@ -412,13 +519,13 @@ export async function runStandingHistoryTaskDelivery(value: StandingHistoryTaskD
     if (proof.schema !== "standing-analysis-owner-ready-v1" || !equal(data(proof.nativeBinding, ["epochId", "requestRef", "purpose"]), last.nativeBinding) ||
         !["released-current-owner", "persisted-owner-settlement"].includes(proof.basis as string) || proof.modelOutcome !== "not-proven" ||
         last.modelOutcome !== "observed" && proof.basis !== "persisted-owner-settlement") return fail("owner");
-    const chosenBody = body ?? existing?.descriptor?.body ?? root.output.summary, prepared = prepareStandingHistoryTaskDeliveryText({ intent, readiness, body: chosenBody });
-    const multipart = prepared.parts.length === 2, partsTotal = multipart ? 2 : 1;
-    const descriptor = descriptorCopy({ schema: multipart ? "standing-history-task-delivery-v2" : "standing-history-task-delivery-v1", taskRef: intent.taskId, sourceHead: readiness.sourceHead, analysisHead: readiness.expectedHead,
+    const chosenBody = finalReport?.body ?? body ?? existing!.descriptor!.body, prepared = prepareStandingHistoryTaskDeliveryText({ intent, readiness, body: chosenBody });
+    const partsTotal = prepared.parts.length, multipart = partsTotal > 1;
+    const descriptor = descriptorCopy({ schema: partsTotal > 2 ? "standing-history-task-delivery-v3" : multipart ? "standing-history-task-delivery-v2" : "standing-history-task-delivery-v1", taskRef: intent.taskId, sourceHead: readiness.sourceHead, analysisHead: readiness.expectedHead,
       rootRef: root.nodeRef, rootHash: root.hash, body: chosenBody, text: prepared.text, textHash: prepared.textHash, coverage: readiness.coverage, gaps: readiness.gaps,
       ...(multipart ? { parts: prepared.parts } : {}) }, intent);
     if (existing && !equal(existing.descriptor, descriptor)) return fail("consumed");
-    const partIndex: 1 | 2 = existing?.nextPart ?? 1, part = prepared.parts[partIndex - 1]!;
+    const partIndex = recoveryBinding?.partIndex ?? existing?.nextPart ?? 1, part = prepared.parts[partIndex - 1]!;
     const freshHeads = async () => { live(); if ((await queued()).headHash !== initialControl.headHash) return fail("stale");
       const s = await source!.status(), a = await analysis!.status(), t = await attempts!.status();
       if (s.storage !== "ready" || a.storage !== "ready" || t.storage !== "ready" || s.readProgress.chainHash !== readiness.sourceHead || a.headHash !== readiness.expectedHead || t.last?.attemptRef !== last.attemptRef) return fail("stale");
@@ -431,7 +538,7 @@ export async function runStandingHistoryTaskDelivery(value: StandingHistoryTaskD
     await freshHeads(); await checkDirectory(directories.delivery, parent);
     if (!existing) { try { await mkdir(slot, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code === "EEXIST") return fail("consumed"); throw e; } }
     const own = existingOwn ?? await pinnedDirectory(slot), versions = new Map<string, string>(); let pilotOwn: BigIntStats | undefined, partOwn: BigIntStats | undefined;
-    const base = multipart ? join(slot, "part-0" + partIndex) : slot, pilotPath = join(base, "pilot");
+    const base = multipart ? join(slot, partDirectory(partIndex)) : slot, pilotPath = join(base, "pilot");
     const guard = async () => { await checkDirectory(directories.delivery, parent); await checkDirectory(slot, own);
       if (partOwn) await checkDirectory(base, partOwn);
       if (pilotOwn) await checkDirectory(pilotPath, pilotOwn);
@@ -442,13 +549,36 @@ export async function runStandingHistoryTaskDelivery(value: StandingHistoryTaskD
       if (saved.domain !== DOMAIN || saved.kind !== "descriptor" || !equal(snapshotStandingHistoryTaskIntent(saved.intent), intent) || !equal(storedDescriptor(saved.descriptor, intent), descriptor)) return fail("storage");
     } else versions.set(descriptorPath, stamp(await writeFile(descriptorPath, { domain: DOMAIN, kind: "descriptor", intent, descriptor: persistedDescriptor(descriptor) }, passphrase, guard)));
     await freshHeads();
-    if (multipart) {
+    if (multipart && !recovering) {
       const beforePart = await readStandingHistoryTaskDelivery({ directory: directories.delivery, passphrase, intent, signal });
       if (beforePart.storage !== "ready" || beforePart.nextPart !== partIndex || !equal(beforePart.descriptor, descriptor)) return fail("consumed");
       await guard(); try { await mkdir(base, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code === "EEXIST") return fail("consumed"); throw e; }
       partOwn = await pinnedDirectory(base);
     }
-    const leaseValue = openReply({ intent, signal }); closeReply = method<StandingTaskReplyLease["close"]>(leaseValue, "close");
+    if (recovering) {
+      partOwn = await pinnedDirectory(base);
+      pilotOwn = await pinnedDirectory(pilotPath);
+      const originalFiles: Record<string, string> = {};
+      for (const name of ["planned.enc", "sending.enc", "terminal.enc"])
+        originalFiles[name] = sha(await readFile(join(pilotPath, name), guard, versions));
+      originalFiles["result.enc"] = sha(await readFile(join(base, "result.enc"), guard, versions));
+      if (sha(canonical(originalFiles)) !== recoveryBinding!.originalRecordsHash) return fail("stale");
+      const recoveryGuard = async () => {
+        await freshHeads(); await guard();
+        if (!equal((await boundedNames(pilotPath, 3)).sort(), ["planned.enc", "sending.enc", "terminal.enc"])) return fail("stale");
+      };
+      await recoveryGuard();
+      const leaseValue = openReply({ intent, signal, taskReplyPolicy: "standalone-if-exact-missing" }); closeReply = method<StandingTaskReplyLease["close"]>(leaseValue, "close");
+      const leaseData = data(leaseValue, ["transport", "close"]), send = method<StandingTaskReplyLease["transport"]["sendOnce"]>(leaseData.transport, "sendOnce"), read = method<StandingTaskReplyLease["transport"]["readExact"]>(leaseData.transport, "readExact");
+      const result = await runStandingHistoryDeliveryRecovery({ directory: join(base, "recovery-v1"), passphrase: multipart ? partPassphrase(passphrase, intent, descriptor, partIndex) : passphrase,
+        binding: recoveryBinding!, authorization: recoveryAuthorization!, text: part.text, signal, guard: recoveryGuard, taskReplyPolicy: "standalone-if-exact-missing",
+        transport: { sendOnce(reply, callSignal) { return callback(() => send(reply, callSignal)); }, readExact(chatId, messageId, callSignal) { return callback(() => read(chatId, messageId, callSignal)); } },
+        async settle() { try { await closeLease(); } finally { await joinCallbacks(); } } });
+      const final = await readStandingHistoryTaskDelivery({ directory: directories.delivery, passphrase, intent });
+      if (final.storage !== "ready" || !equal(final.descriptor, descriptor)) return fail("storage");
+      return Object.freeze({ descriptor, result, leaseJoined: true, partIndex, partsTotal, deliveryComplete: final.delivery === "verified" });
+    }
+    const leaseValue = openReply({ intent, signal, taskReplyPolicy: "standalone-if-exact-missing" }); closeReply = method<StandingTaskReplyLease["close"]>(leaseValue, "close");
     const leaseData = data(leaseValue, ["transport", "close"]), send = method<StandingTaskReplyLease["transport"]["sendOnce"]>(leaseData.transport, "sendOnce"), read = method<StandingTaskReplyLease["transport"]["readExact"]>(leaseData.transport, "readExact");
     const pilotKey = multipart ? partPassphrase(passphrase, intent, descriptor, partIndex) : passphrase;
     const pilot = createEncryptedPilotStore(pilotPath, pilotKey);
@@ -463,11 +593,12 @@ export async function runStandingHistoryTaskDelivery(value: StandingHistoryTaskD
     // Observe only after the existing exact encrypted readback and custody
     // guards resolve. This adds no reads, sends, or aggregate completion claim.
     const store = onOwnAction ? wrapPilotStore(guardedStore, reply, onOwnAction) : guardedStore;
-    const result = await runPilotReply({ approved: { chatId: intent.chatId, accountId: intent.accountId, replyToMessageId: intent.primaryMessageId, maximumTextBytes: 4096 },
+    const result = await runPilotReply({ approved: { chatId: intent.chatId, accountId: intent.accountId, replyToMessageId: intent.primaryMessageId, maximumTextBytes: 4096, taskReplyPolicy: "standalone-if-exact-missing" },
       reply, store,
-      transport: { sendOnce(reply, signal) { return callback(async () => { await freshHeads(); await guard();
+      transport: { sendOnce(reply, signal) { return callback(async () => { try { await freshHeads(); await guard();
         if (multipart) { const prefix = await readStandingHistoryTaskDelivery({ directory: directories.delivery, passphrase, intent, signal });
           if (prefix.storage !== "ready" || prefix.verifiedParts !== partIndex - 1 || !equal(prefix.descriptor, descriptor)) return fail("consumed"); }
+        } catch (error) { throw tagPilotTaskSendError(error, "task-preflight"); }
         return send(reply, signal); }); },
         readExact(chatId, messageId, signal) { return callback(() => read(chatId, messageId, signal)); } }, killSwitchEngaged: () => signal.aborted, signal });
     try { await closeLease(); } finally { await joinCallbacks(); }

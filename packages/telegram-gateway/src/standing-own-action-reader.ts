@@ -1,3 +1,4 @@
+import { STANDING_INCOMING_TEXT_BYTES } from "./standing-context.js";
 import { createDecipheriv, createHash, scrypt } from "node:crypto";
 import { type BigIntStats } from "node:fs";
 import { lstat, open, opendir } from "node:fs/promises";
@@ -81,10 +82,11 @@ async function decryptPilot(serialized: string, passphrase: string): Promise<unk
   } finally { key?.fill(0); clear?.fill(0); salt.fill(0); iv.fill(0); tag.fill(0); cipher.fill(0); }
 }
 function pilotRecord(value: unknown): PilotRecord {
-  const r = fields(value, ["version", "state", "idempotencyKey", "randomId", "chatId", "accountId", "replyToMessageId", "contentHash", "textBytes"], ["messageId"]);
+  const r = fields(value, ["version", "state", "idempotencyKey", "randomId", "chatId", "accountId", "replyToMessageId", "contentHash", "textBytes"], ["messageId", "wireReplyToMessageId"]);
   if (r.version !== "pilot-outbox-v1" || !["planned", "sending", "verified", "unknown", "failed_terminal"].includes(r.state) || !hex(r.idempotencyKey) || !hex(r.contentHash) ||
       !long(r.randomId) || !long(r.accountId) || typeof r.chatId !== "string" || !/^-[1-9]\d{0,19}$/.test(r.chatId) || !integer(r.textBytes, 4096) ||
-      !(r.replyToMessageId === null || messageId(r.replyToMessageId)) || (r.state === "verified") !== Object.hasOwn(r, "messageId") || Object.hasOwn(r, "messageId") && !messageId(r.messageId)) return fail();
+      !(r.replyToMessageId === null || messageId(r.replyToMessageId)) || (r.state === "verified") !== Object.hasOwn(r, "messageId") || Object.hasOwn(r, "messageId") && !messageId(r.messageId) ||
+      Object.hasOwn(r, "wireReplyToMessageId") && (r.state !== "verified" || r.wireReplyToMessageId !== null || !messageId(r.replyToMessageId))) return fail();
   return r as PilotRecord;
 }
 function pilotIdentity(r: PilotRecord): unknown {
@@ -233,7 +235,7 @@ export async function openStandingOwnActionReader(value: StandingOwnActionReader
             const marker = fields(await dialogue("journal.enc", "journal", "binding"), ["format"]); if (marker.format !== "immutable-source-events-v1") return fail();
             const q = fields(await dialogue(key + ".question.enc", "question", key), ["question", "recordedAt"]), question = fields(q.question, ["primary"], ["source", "context"]);
             const primary = fields(question.primary, ["chatId", "ownerId", "messageId", "text"]);
-            if (!integer(q.recordedAt, 253402300799) || primary.chatId !== binding.chatId || primary.messageId !== planned.replyToMessageId || !long(primary.ownerId) || primary.ownerId === binding.accountId || !text(primary.text, 4096)) return fail();
+            if (!integer(q.recordedAt, 253402300799) || primary.chatId !== binding.chatId || primary.messageId !== planned.replyToMessageId || !long(primary.ownerId) || primary.ownerId === binding.accountId || !text(primary.text, STANDING_INCOMING_TEXT_BYTES)) return fail();
             const o = fields(await dialogue(key + ".outcome.enc", "outcome", key), ["key", "delivery", "kind", "answer"], ["entities", "deliveryDiagnostic", "image"]);
             if (o.key !== key || !["verified", "unknown", "not-sent"].includes(o.delivery) || !["model", "deferred"].includes(o.kind) || !text(o.answer, 4096) || Object.hasOwn(o, "image") ||
                 Object.hasOwn(o, "deliveryDiagnostic") && (o.delivery !== (o.deliveryDiagnostic === "pre-dispatch-refused" ? "not-sent" : "unknown") || !isPilotDeliveryDiagnostic(o.deliveryDiagnostic))) return fail();

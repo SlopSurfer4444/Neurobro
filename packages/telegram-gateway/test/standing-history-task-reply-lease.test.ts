@@ -7,7 +7,7 @@ import { Api, utils } from "telegram";
 import bigInt from "big-integer";
 import { createStandingConversationAdapter, StandingAdapterError, type StandingIdleHistoryTicket, type StandingSelection } from "../src/standing-conversation-adapter.js";
 import { createConversationReferences } from "../src/conversation-references.js";
-import { createEncryptedPilotStore, runPilotReply, type PilotSend, type PilotTransport } from "../src/pilot-outbox.js";
+import { createEncryptedPilotStore, runPilotReply, type PilotSend, type PilotTransport, type PilotRecord } from "../src/pilot-outbox.js";
 import type { StandingHistoryTaskIntent } from "../src/standing-history-task-store.js";
 
 const gate = () => { let done!: () => void; const promise = new Promise<void>(r => { done = r; }); return { done, promise }; };
@@ -33,7 +33,7 @@ function fixture(basic = false, initial = [message(80, undefined, basic)]) {
     }
     if (r instanceof Api.messages.SendMessage) {
       const id = Math.max(90, ...values.map(v => v.id)) + 1, sent = message(id, r.message, basic, "789");
-      sent.replyTo = new Api.MessageReplyHeader({ replyToMsgId: (r.replyTo as Api.InputReplyToMessage).replyToMsgId });
+      if (r.replyTo) sent.replyTo = new Api.MessageReplyHeader({ replyToMsgId: (r.replyTo as Api.InputReplyToMessage).replyToMsgId });
       if (r.entities !== undefined) sent.entities = r.entities;
       values.push(sent);
       return new Api.UpdateShortSentMessage({ id, out: true, pts: 1, ptsCount: 1, date: 100 });
@@ -212,7 +212,7 @@ test("uncertain actual send consumes fixed encrypted task slot across fresh adap
   const adapter = await createStandingConversationAdapter(f.options), task = new AbortController();
   const lease = (await ticket(adapter, f.control.signal)).openTaskReply({ intent: f.intent(), signal: task.signal });
   f.override(async r => { const value = await f.respond(r); if (r instanceof Api.messages.SendMessage) throw Error("synthetic lost send acknowledgement"); return value; });
-  assert.equal((await dispatch(f, lease.transport, directory)).state, "unknown"); await lease.close();
+  assert.deepEqual(await dispatch(f, lease.transport, directory), { state: "unknown", code: "send-or-readback-unknown", deliveryDiagnostic: "task-send-rpc" }); await lease.close();
   assert.equal(sends(f).length, 1); assert.equal(f.values.filter(v => v.out).length, 1);
   const before = await readFile(join(directory, "terminal.enc")); await adapter.closeCapabilities(); f.references.close();
   const restarted = fixture(), nextAdapter = await createStandingConversationAdapter(restarted.options);
@@ -220,6 +220,33 @@ test("uncertain actual send consumes fixed encrypted task slot across fresh adap
   assert.deepEqual(await dispatch(restarted, next.transport, directory, "Changed result after restart"), { state: "refused", code: "store-refused" });
   await next.close(); assert.equal(sends(restarted).length, 0); assert.equal(exactReads(restarted).length, 0);
   assert.deepEqual(await readFile(join(directory, "terminal.enc")), before); await nextAdapter.closeCapabilities(); restarted.references.close();
+});
+
+test("task send failure stages distinguish preflight, anchor read, anchor validation and acknowledgement parsing without proving no send", async () => {
+  for (const diagnostic of ["task-preflight", "task-anchor-read", "task-anchor-validation", "task-ack-parse"] as const) {
+    const f = fixture(), adapter = await createStandingConversationAdapter(f.options), task = new AbortController();
+    const lease = (await ticket(adapter, f.control.signal)).openTaskReply({ intent: f.intent(), signal: task.signal });
+    if (diagnostic === "task-preflight") await lease.close();
+    f.override(async r => {
+      if (r instanceof Api.channels.GetMessages && diagnostic === "task-anchor-read") throw Error("PRIVATE anchor RPC failure");
+      if (r instanceof Api.channels.GetMessages && diagnostic === "task-anchor-validation") return f.batch([new Api.MessageEmpty({ id: 80 })]);
+      const response = await f.respond(r);
+      if (r instanceof Api.messages.SendMessage && diagnostic === "task-ack-parse") return {};
+      return response;
+    });
+    const records: string[] = []; let claimed = false;
+    const input = { approved: { accountId: "789", chatId: f.options.binding.peerId, replyToMessageId: 80, maximumTextBytes: 4096 },
+      reply: { chatId: f.options.binding.peerId, replyToMessageId: 80, text: "PRIVATE report" }, transport: lease.transport,
+      store: { async reserve() { if (claimed) throw Error("consumed"); claimed = true; }, async append(record: { state: string }) { records.push(record.state); } },
+      killSwitchEngaged: () => false, signal: task.signal };
+    assert.deepEqual(await runPilotReply(input), { state: "unknown", code: "send-or-readback-unknown", deliveryDiagnostic: diagnostic });
+    assert.deepEqual(records, ["sending", "unknown"]);
+    assert.equal(sends(f).length, diagnostic === "task-ack-parse" ? 1 : 0);
+    assert.equal(f.values.filter(row => row.out).length, diagnostic === "task-ack-parse" ? 1 : 0);
+    assert.deepEqual(await runPilotReply(input), { state: "refused", code: "store-refused" });
+    assert.equal(sends(f).length, diagnostic === "task-ack-parse" ? 1 : 0);
+    await lease.close(); await adapter.closeCapabilities(); f.references.close();
+  }
 });
 
 test("outbox persists UNKNOWN on local abort before late send settles while lease still joins actual I/O", async t => {
@@ -250,4 +277,92 @@ test("outbox persists UNKNOWN on local abort before late send settles while leas
   } finally {
     finish.done(); await result; await lease.close(); await adapter.closeCapabilities(); f.references.close();
   }
+});
+
+const missingPolicy = "standalone-if-exact-missing" as const;
+
+test("explicit task policy sends a missing-anchor result standalone and persists actual null wire target", async t => {
+  const parent = await privateDirectory(t);
+  for (const basic of [false, true]) {
+    const f = fixture(basic), adapter = await createStandingConversationAdapter(f.options), task = new AbortController();
+    const lease = (await ticket(adapter, f.control.signal)).openTaskReply({ intent: f.intent(), signal: task.signal, taskReplyPolicy: missingPolicy });
+    f.values.length = 0;
+    const records: PilotRecord[] = [], store = createEncryptedPilotStore(join(parent, basic ? "missing-basic" : "missing-channel"), phrase);
+    const result = await runPilotReply({ approved: { accountId: "789", chatId: f.options.binding.peerId, replyToMessageId: 80, maximumTextBytes: 4096, taskReplyPolicy: missingPolicy },
+      reply: { chatId: f.options.binding.peerId, replyToMessageId: 80, text: "History result" }, transport: lease.transport,
+      store: { reserve: r => store.reserve(r), async append(r) { records.push(r); await store.append(r); } }, killSwitchEngaged: () => false, signal: task.signal });
+    assert.deepEqual(result, { state: "verified", code: "verified" });
+    assert.equal(sends(f).length, 1); assert.equal(sends(f)[0]!.replyTo, undefined);
+    assert.equal(records.at(-1)!.replyToMessageId, 80); assert.equal(records.at(-1)!.wireReplyToMessageId, null);
+    assert.equal(records.at(-1)!.state, "verified"); assert.equal(exactReads(f).length, 2);
+    await lease.close(); await adapter.closeCapabilities(); f.references.close();
+  }
+});
+
+test("missing-anchor policy readback reports actual null or exact prior anchor, never fabricates the origin", async () => {
+  for (const priorAnchor of [false, true]) {
+    const f = fixture(), adapter = await createStandingConversationAdapter(f.options), task = new AbortController();
+    const lease = (await ticket(adapter, f.control.signal)).openTaskReply({ intent: f.intent(), signal: task.signal, taskReplyPolicy: missingPolicy });
+    f.values.length = 0;
+    f.override(async r => {
+      if (r instanceof Api.channels.GetMessages && (r.id[0] as Api.InputMessageID).id === 80)
+        return f.batch([new Api.MessageEmpty({ id: 80, peerId: peer(false) })]);
+      const response = await f.respond(r);
+      if (priorAnchor && r instanceof Api.messages.SendMessage) f.values.at(-1)!.replyTo = new Api.MessageReplyHeader({ replyToMsgId: 80 });
+      return response;
+    });
+    const sent = await lease.transport.sendOnce(f.reply(), task.signal);
+    const observed = await lease.transport.readExact(f.reply().chatId, sent.messageId, task.signal);
+    assert.equal(observed!.replyToMessageId, priorAnchor ? 80 : null);
+    if (priorAnchor) assert.equal(Object.hasOwn(observed!, "taskReplyOriginMessageId"), false);
+    else assert.equal(observed!.taskReplyOriginMessageId, 80);
+    assert.equal(sends(f)[0]!.replyTo, undefined); assert.equal(sends(f)[0]!.randomId!.toString(), f.reply().randomId);
+    await lease.close(); await adapter.closeCapabilities(); f.references.close();
+  }
+});
+
+test("explicit missing-anchor policy cannot bypass malformed empty responses or existing anchor protections", async () => {
+  for (const kind of ["wrong-empty-id", "foreign-empty-peer", "empty-batch", "multiple", "foreign", "requester", "own", "post", "media"] as const) {
+    const f = fixture(), adapter = await createStandingConversationAdapter(f.options), task = new AbortController();
+    const lease = (await ticket(adapter, f.control.signal)).openTaskReply({ intent: f.intent(), signal: task.signal, taskReplyPolicy: missingPolicy });
+    if (kind === "foreign") f.values[0]!.peerId = new Api.PeerChannel({ channelId: bigInt(999) });
+    if (kind === "requester") f.values[0]!.fromId = new Api.PeerUser({ userId: bigInt(999) });
+    if (kind === "own") f.values[0]!.out = true;
+    if (kind === "post") f.values[0]!.post = true;
+    if (kind === "media") f.values[0]!.media = new Api.MessageMediaPhoto({ photo: new Api.PhotoEmpty({ id: bigInt(1) }) });
+    f.override(async r => {
+      if (r instanceof Api.channels.GetMessages) {
+        if (kind === "wrong-empty-id") return f.batch([new Api.MessageEmpty({ id: 81 })]);
+        if (kind === "foreign-empty-peer") return f.batch([new Api.MessageEmpty({ id: 80, peerId: new Api.PeerChannel({ channelId: bigInt(999) }) })]);
+        if (kind === "empty-batch") return f.batch([]);
+        if (kind === "multiple") return f.batch([new Api.MessageEmpty({ id: 80 }), new Api.MessageEmpty({ id: 81 })]);
+      }
+      return f.respond(r);
+    });
+    await assert.rejects(lease.transport.sendOnce(f.reply(), task.signal)); assert.equal(sends(f).length, 0);
+    await lease.close(); await adapter.closeCapabilities(); f.references.close();
+  }
+});
+
+test("standalone readback refuses unrelated or scheduled reply headers and needs an exact missing proof", async () => {
+  for (const kind of ["foreign-anchor", "foreign-peer", "scheduled", "no-missing-proof"] as const) {
+    const f = fixture(), adapter = await createStandingConversationAdapter(f.options), task = new AbortController();
+    const lease = (await ticket(adapter, f.control.signal)).openTaskReply({ intent: f.intent(), signal: task.signal, taskReplyPolicy: missingPolicy });
+    if (kind !== "no-missing-proof") f.values.length = 0;
+    const sent = await lease.transport.sendOnce(f.reply(), task.signal), row = f.values.find(v => v.id === sent.messageId)!;
+    if (kind === "foreign-anchor") row.replyTo = new Api.MessageReplyHeader({ replyToMsgId: 81 });
+    if (kind === "foreign-peer") row.replyTo = new Api.MessageReplyHeader({ replyToMsgId: 80, replyToPeerId: new Api.PeerChannel({ channelId: bigInt(999) }) });
+    if (kind === "scheduled") row.replyTo = new Api.MessageReplyHeader({ replyToMsgId: 80, replyToScheduled: true });
+    if (kind === "no-missing-proof") delete row.replyTo;
+    await assert.rejects(lease.transport.readExact(f.reply().chatId, sent.messageId, task.signal)); assert.equal(sends(f).length, 1);
+    await lease.close(); await adapter.closeCapabilities(); f.references.close();
+  }
+});
+
+test("invalid or executable missing-anchor policy does not consume task reply authority", async () => {
+  const f = fixture(), adapter = await createStandingConversationAdapter(f.options), idle = await ticket(adapter, f.control.signal); let reads = 0;
+  for (const policy of [undefined, null, false, "allow-any-missing"]) assert.throws(() => idle.openTaskReply({ intent: f.intent(), signal: f.control.signal, taskReplyPolicy: policy } as never));
+  await assert.rejects(async () => idle.openTaskReply({ intent: f.intent(), signal: f.control.signal, get taskReplyPolicy() { reads++; return missingPolicy; } }));
+  assert.equal(reads, 0); const lease = idle.openTaskReply({ intent: f.intent(), signal: f.control.signal }); await lease.close();
+  await adapter.closeCapabilities(); f.references.close();
 });

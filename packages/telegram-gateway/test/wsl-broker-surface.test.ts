@@ -42,7 +42,10 @@ test("separate guest process completes authenticated requests through actual OS 
   const program = `
     import assert from 'node:assert/strict';
     import { createWslBrokerGuest, createBrokerPipeExchange } from ${JSON.stringify(guestModule)};
-    const guest = createWslBrokerGuest({key:Buffer.alloc(32,29),keyId:'fixture',sessionId:'a'.repeat(32)},
+    // Independent process clocks need not have identical performance.timeOrigin
+    // calibration. Keep this pipe-success fixture away from the host's exact
+    // 5000ms admission ceiling; deadline rejection is tested separately below.
+    const guest = createWslBrokerGuest({key:Buffer.alloc(32,29),keyId:'fixture',sessionId:'a'.repeat(32),limits:{maxDeadlineMs:4000}},
       createBrokerPipeExchange(process.stdin, b => new Promise((resolve,reject) => process.stdout.write(b,e=>e?reject(e):resolve())), () => process.stdin.destroy()));
     try {
       const snapshot = await guest.request('snapshot.read',{path:'src/main.ts'});

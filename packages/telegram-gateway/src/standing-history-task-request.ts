@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { types } from "node:util";
-import { snapshotStandingHistoryTaskIntent, type StandingHistoryTaskIntent } from "./standing-history-task-store.js";
+import { snapshotStandingHistoryTaskIntent, snapshotStandingHistoryTaskObservedSource, type StandingHistoryTaskIntent,
+  type StandingHistoryTaskObservedSource } from "./standing-history-task-store.js";
 
 const refuse = (): never => { throw new Error("STANDING_HISTORY_TASK_REQUEST_INPUT"); };
 function fields(value: unknown, keys: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
@@ -25,8 +26,9 @@ export function createStandingHistoryTaskRequest(input: Readonly<{
   binding: Readonly<{ accountId: string; peerId: string }>;
   primary: Readonly<{ chatId: string; ownerId: string; messageId: number; text?: string }>;
   request: Readonly<{ fromDate: number; toDate: number; timezone: string; objective: string }>;
+  source?: StandingHistoryTaskObservedSource;
 }>): StandingHistoryTaskIntent {
-  const args = fields(input, ["identityKey", "binding", "primary", "request"]);
+  const args = fields(input, ["identityKey", "binding", "primary", "request"], ["source"]);
   const b = fields(args.binding, ["accountId", "peerId"]);
   // Accept actual PilotPrimary without retaining its conversation text.
   const p = fields(args.primary, ["chatId", "ownerId", "messageId"], ["text"]);
@@ -35,8 +37,10 @@ export function createStandingHistoryTaskRequest(input: Readonly<{
       p.chatId !== b.peerId || p.ownerId === b.accountId || Object.hasOwn(p, "text") && typeof p.text !== "string") return refuse();
   // Validate all identities/values before using them in key material. The zero
   // task ID is an internal placeholder and is never returned or persisted.
+  const source = Object.hasOwn(args, "source") ? snapshotStandingHistoryTaskObservedSource(args.source) : undefined;
   const canonical = snapshotStandingHistoryTaskIntent({ schema: "standing-history-task-v1", taskId: "htask_" + "0".repeat(48),
-    accountId: b.accountId, chatId: b.peerId, requesterId: p.ownerId, primaryMessageId: p.messageId, ...r });
+    accountId: b.accountId, chatId: b.peerId, requesterId: p.ownerId, primaryMessageId: p.messageId, ...r,
+    ...(source === undefined ? {} : { source }) });
   const taskId = "htask_" + createHmac("sha256", Buffer.from(args.identityKey, "hex"))
     .update(JSON.stringify(["DecadansNeurobro/history-request/v1", canonical.accountId, canonical.chatId,
       canonical.requesterId, canonical.primaryMessageId])).digest("hex").slice(0, 48);

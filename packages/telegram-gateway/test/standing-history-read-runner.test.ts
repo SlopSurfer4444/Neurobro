@@ -53,9 +53,9 @@ async function fixture(t: TestContext, addressed = 12) {
     } } });
   t.after(async () => { await adapter.closeCapabilities(); references.close(); assert.ok(root.startsWith(join(resolve(tmpdir()), "neurobro-read-runner-"))); await rm(root, { recursive: true, force: true }); });
   const args = { adapter: { async pollWork(s: AbortSignal, options: { backgroundDue: boolean }) { due.push(options.backgroundDue); return adapter.pollWork(s, options); } }, directories, passphrase, binding, signal: signal.signal };
-  async function create(letter: string, foreign = false) {
+  async function create(letter: string, foreign = false, source?: StandingHistoryTaskIntent["source"]) {
     const intent: StandingHistoryTaskIntent = { schema: "standing-history-task-v1", taskId: "htask_" + letter.repeat(48), accountId: binding.accountId, chatId: foreign ? "-100999" : binding.peerId,
-      requesterId: "456", primaryMessageId: 1001, fromDate: 1, toDate: 99, timezone: "UTC", objective: "Synthetic historical task " + letter };
+      requesterId: "456", primaryMessageId: 1001, fromDate: 1, toDate: 99, timezone: "UTC", objective: "Synthetic historical task " + letter, ...(source ? { source } : {}) };
     const pages = await openStandingHistoryTaskStore({ directory: directories.pages, passphrase, intent, mode: "create" }); await pages.close();
     const control = await openStandingHistoryTaskControlStore({ directory: directories.control, passphrase, intent, mode: "create" }); await control.close(); return intent;
   }
@@ -69,6 +69,46 @@ async function answer(selected: StandingSelection, signal: AbortSignal) {
   const input = { chatId: selected.primary.chatId, replyToMessageId: selected.primary.messageId, text: "Synthetic foreground answer", randomId: "112233" };
   const sent = await selected.transport.sendOnce(input, signal); await selected.transport.readExact(input.chatId, sent.messageId, signal);
 }
+
+test("source pin absence or mismatch is task-local and never opens a history lease", async t => {
+  const source = { kind: "observed-source", sourceRef: "community", workspaceId: "synthetic-team-v1", peerId: "-100888" } as const;
+  for (const pin of [undefined, { ...source, peerId: "-100889" }, { ...source, workspaceId: "other-team-v1" }]) {
+    const f = await fixture(t, 0), intent = await f.create("a", false, source), before = await f.status(intent);
+    const runner = await openStandingHistoryReadRunner({ ...f.args, ...(pin ? { observedSource: pin } : {}) });
+    try {
+      assert.deepEqual(await runner.poll(), { kind: "background", outcome: { kind: "stalled", taskRef: intent.taskId, reason: "source-unavailable" } });
+      assert.equal(f.taskCalls(), 0); assert.deepEqual(await f.status(intent), before);
+      await f.cancel(intent);
+      const control = await openStandingHistoryTaskControlStore({ directory: f.args.directories.control, passphrase: f.args.passphrase, intent, mode: "open" });
+      try { assert.equal((await control.status()).state, "cancelled"); } finally { await control.close(); }
+      const internal = await f.create("b"); let found = false;
+      for (let i = 0; i < 4; i++) { const work = await runner.poll();
+        if (work.kind === "background" && work.outcome.kind === "read" && work.outcome.taskRef === internal.taskId) { found = true; break; }
+      }
+      assert.equal(found, true); assert.equal(f.taskCalls(), 1);
+    } finally { await runner.close(); }
+  }
+});
+
+test("matching source pin permits read-only task inspection and configuration is immutable", async t => {
+  const source = { kind: "observed-source", sourceRef: "community", workspaceId: "synthetic-team-v1", peerId: "-100888" } as const;
+  const f = await fixture(t, 0), intent = await f.create("a", false, source); await f.cancel(intent);
+  const pin = { ...source }, runner = await openStandingHistoryReadRunner({ ...f.args, observedSource: pin });
+  Object.assign(pin, { workspaceId: "other-team-v1" });
+  try { assert.deepEqual(await runner.poll(), { kind: "background", outcome: { kind: "skipped", taskRef: intent.taskId, reason: "cancelled" } }); }
+  finally { await runner.close(); }
+  assert.equal(f.taskCalls(), 0);
+});
+
+test("read runner rejects malformed source pins without invoking hostile fields", async t => {
+  const f = await fixture(t, 0); let evaluated = 0;
+  const source = { kind: "observed-source", sourceRef: "community", workspaceId: "synthetic-team-v1", peerId: "-100888" } as const;
+  const hostile = { ...source }; Object.defineProperty(hostile, "workspaceId", { enumerable: true, get() { evaluated++; return source.workspaceId; } });
+  for (const pin of [undefined, null, { ...source, send: true }, hostile, new Proxy(source, {})]) {
+    await assert.rejects(openStandingHistoryReadRunner({ ...f.args, observedSource: pin } as never), /INPUT/);
+  }
+  assert.equal(evaluated, 0); assert.equal(f.due.length, 0);
+});
 
 test("real work loop gives each task one page per cycle under a continuously addressed queue", async t => {
   const f = await fixture(t), a = await f.create("a"), b = await f.create("b"), runner = await openStandingHistoryReadRunner(f.args); t.after(() => runner.close());
@@ -171,7 +211,7 @@ test("incremental discovery yields bounded scan coverage, skips foreign/cancelle
     const outcome = work.outcome;
     if (outcome.kind === "scan") { scans++; assert.ok(outcome.coverage.unavailable > 0); }
     else if (outcome.kind === "skipped") skips.set(outcome.taskRef, outcome.reason);
-    else { reads++; assert.equal(outcome.taskRef, ready.taskId); assert.equal(outcome.result.kind, "committed"); }
+    else { if (outcome.kind !== "read") assert.fail("internal task unexpectedly stalled"); reads++; assert.equal(outcome.taskRef, ready.taskId); assert.equal(outcome.result.kind, "committed"); }
   }
   assert.ok(scans); assert.equal(skips.get(cancelled.taskId), "cancelled"); assert.equal(skips.get(broken.taskId), "unavailable");
   assert.equal((await f.status(foreign)).readProgress.committedPages, 0); assert.ok(reads); assert.equal(f.taskCalls(), reads);

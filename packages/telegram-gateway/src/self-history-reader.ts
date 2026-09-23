@@ -9,6 +9,7 @@ export type SelfHistoryRequest = Readonly<{ fromDate: number; toDate: number; cu
 export type SelfHistoryMessage = Readonly<{
   ref: string; authorRef: string; author: "self" | "user" | "bot" | "unknown"; displayName: string;
   date: number; editedAt: number | null; replyRef: string | null; replyUnavailable: boolean; text: string;
+  forwarded?: Readonly<{ originalDate: number; sourceName: string | null; interpretation: "quoted-source-not-request" }>;
 }>;
 export type SelfHistoryPage = Readonly<{
   schema: "neurobro-self-history-v1"; fromDate: number; toDate: number;
@@ -47,6 +48,30 @@ const userValid = (id: string) => /^[1-9]\d{0,19}$/.test(id);
 const textValid = (value: unknown, maximum: number): value is string => typeof value === "string" && value.trim().length > 0 &&
   !value.includes("\0") && Buffer.byteLength(value, "utf8") <= maximum && Buffer.from(value, "utf8").toString("utf8") === value;
 const samePeer = (value: Api.TypePeer | undefined, expected: string) => { try { return value !== undefined && utils.getPeerId(value) === expected; } catch { return false; } };
+function forwardProvenance(value: unknown): SelfHistoryMessage["forwarded"] {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || types.isProxy(value) || !(value instanceof Api.MessageFwdHeader)) return fail("protocol");
+  const field = (key: string): unknown => {
+    const d = Object.getOwnPropertyDescriptor(value, key);
+    if (!d) return undefined;
+    if (!("value" in d) || !d.enumerable) return fail("protocol");
+    return d.value;
+  };
+  const originalDate = field("date"); if (!dateValid(originalDate)) return fail("protocol");
+  const label = (raw: unknown): string => {
+    if (raw === undefined || raw === null) return "";
+    if (typeof raw !== "string" || Buffer.byteLength(raw) > 4096 || Buffer.from(raw).toString("utf8") !== raw) return fail("protocol");
+    let result = "";
+    for (const char of raw.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, " ").trim()) {
+      if (Buffer.byteLength(result + char) > 128) break;
+      result += char;
+    }
+    return result.trim();
+  };
+  const fromName = label(field("fromName")), postAuthor = label(field("postAuthor"));
+  return Object.freeze({ originalDate, sourceName: fromName || postAuthor || null,
+    interpretation: "quoted-source-not-request" });
+}
 
 function data(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
   if (!value || typeof value !== "object" || types.isProxy(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return fail("input");
@@ -87,9 +112,13 @@ type Position = { fromDate: number; toDate: number; offsetId: number; lastDate: 
 export function createSelfHistoryReader(input: {
   client: PilotInvoker; peer: Api.InputPeerChat | Api.InputPeerChannel; binding: PilotBinding; self: Api.User; signal: AbortSignal;
   references?: ConversationReferences;
+  /** Host-only durable reads; captions and channel posts remain quoted text. */
+  durableText?: boolean;
 }): Readonly<{ read(request: SelfHistoryRequest): Promise<SelfHistoryPage>; readTaskPage(request: SelfHistoryTaskRequest): Promise<SelfHistoryTaskPage>; close(): void }> {
   const binding = Object.freeze({ ...input.binding });
   const references = input.references;
+  if ((input.durableText !== undefined && typeof input.durableText !== "boolean") || (input.durableText && references)) return fail("binding");
+  const durableText = input.durableText === true;
   if (references && !references.matches(binding.peerId, binding.accountId)) return fail("binding");
   if (!(input.self instanceof Api.User) || !input.self.self || input.self.bot || input.self.deleted ||
       input.self.id.toString() !== binding.accountId || !userValid(binding.accountId)) return fail("binding");
@@ -174,23 +203,29 @@ export function createSelfHistoryReader(input: {
         const date = !(value instanceof Api.MessageEmpty) && dateValid(value.date) ? value.date : null;
         if (date !== null && date < position.fromDate) { status = "lower-bound-reached"; complete = true; break; }
         let projected: SelfHistoryMessage | undefined;
+        let projectedAuthorId: string | undefined;
         let reason: keyof typeof excluded | undefined;
         if (date === null || value instanceof Api.MessageEmpty) reason = "unavailable";
         else if (date > position.toDate) reason = "outsidePeriod";
-        else if (!(value instanceof Api.Message) || !(value.fromId instanceof Api.PeerUser) || value.post || value.fwdFrom || value.viaBotId || value.groupedId || value.replyMarkup ||
-            (value.media && !(value.media instanceof Api.MessageMediaEmpty))) reason = "nonText";
-        else if (!textValid(value.message, 4096)) reason = "invalidText";
+        else if (!(value instanceof Api.Message) || !durableText && (!(value.fromId instanceof Api.PeerUser) || value.post || value.fwdFrom || value.viaBotId || value.groupedId || value.replyMarkup ||
+            (value.media && !(value.media instanceof Api.MessageMediaEmpty)))) reason = "nonText";
+        else if (durableText && !value.message?.trim()) reason = "nonText";
+        else if (!textValid(value.message, 16384)) reason = "invalidText";
         else {
-          const authorId = value.fromId.userId.toString(), own = authorId === binding.accountId;
+          const sender = value.fromId ?? (durableText && value.post ? value.peerId : undefined);
+          const authorId = sender instanceof Api.PeerUser ? sender.userId.toString() : durableText && (sender instanceof Api.PeerChannel || sender instanceof Api.PeerChat) ? utils.getPeerId(sender) : "";
+          const own = authorId === binding.accountId;
           const matches = batch.users.filter(user => user.id.toString() === authorId), user = matches.length === 1 && matches[0] instanceof Api.User ? matches[0] : undefined;
-          if (!userValid(authorId) || !!value.out !== own || matches.length > 1 || (!own && user?.self)) reason = "unavailable";
+          if (!(userValid(authorId) || durableText && /^-[1-9]\d{0,19}$/u.test(authorId)) || ((!durableText || userValid(authorId)) && !!value.out !== own) || matches.length > 1 || (!own && user?.self)) reason = "unavailable";
           else {
+            projectedAuthorId = authorId;
+            const forwarded = durableText ? forwardProvenance(value.fwdFrom) : undefined;
             const reply = value.replyTo, replyValid = reply instanceof Api.MessageReplyHeader && !reply.replyToScheduled && idValid(reply.replyToMsgId) &&
               reply.replyToMsgId < value.id && (!reply.replyToPeerId || samePeer(reply.replyToPeerId, binding.peerId));
             projected = Object.freeze({ ref: ref("m", String(value.id)), authorRef: ref("a", authorId),
-              author: own ? "self" : !user || user.deleted ? "unknown" : user.bot ? "bot" : "user", displayName: name(user, own),
+              author: own ? "self" : !user || user.deleted ? "unknown" : user.bot ? "bot" : "user", displayName: authorId.startsWith("-") ? "Канал / группа" : name(user, own),
               date, editedAt: dateValid(value.editDate) ? value.editDate : null, replyRef: replyValid ? ref("m", String(reply.replyToMsgId)) : null,
-              replyUnavailable: !!reply && !replyValid, text: value.message });
+              replyUnavailable: !!reply && !replyValid, text: value.message, ...(forwarded ? { forwarded } : {}) });
           }
         }
         const size = projected ? Buffer.byteLength(JSON.stringify(projected), "utf8") : 0;
@@ -203,8 +238,8 @@ export function createSelfHistoryReader(input: {
         if (beforeCheckpoint) {
           const reply = !(value instanceof Api.MessageEmpty) ? value.replyTo : undefined;
           sources.push(Object.freeze({ messageId: value.id, date, disposition: projected ? "included" : reason!,
-            ...(projected && value instanceof Api.Message && value.fromId instanceof Api.PeerUser ? {
-              messageRef: projected.ref, authorId: value.fromId.userId.toString(),
+            ...(projected && projectedAuthorId ? {
+              messageRef: projected.ref, authorId: projectedAuthorId,
               ...(projected.replyRef !== null && reply instanceof Api.MessageReplyHeader ? { replyToMessageId: reply.replyToMsgId } : {}) } : {}) }));
         }
       }

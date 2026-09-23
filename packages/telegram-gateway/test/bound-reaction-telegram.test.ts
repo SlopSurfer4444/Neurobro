@@ -38,6 +38,14 @@ function harness(responses: unknown[], overrides: Partial<Args> = {}) {
 const refused = (code?: BoundReactionTelegramError["code"], unknown?: boolean) => (error: unknown) => error instanceof BoundReactionTelegramError &&
   (code === undefined || error.code === code) && (unknown === undefined || error.unknown === unknown) && !error.message.includes("private");
 
+test("long Russian selected request still permits an exactly revalidated reaction", async () => {
+  const primary = { ...selected, text: "ПРОМПТ " + "я".repeat(4000) + " конец" };
+  const f = harness([full(), messages(), ack([["👍", 1, 0]]), full(), messages(message([["👍", 1, 0]]))],
+    { selected: primary, revalidatePrimary: async () => ({ ...primary }) });
+  assert.equal((await f.transport.setOnce("👍")).state, "set");
+  assert.equal(f.requests.filter(x => x instanceof Api.messages.SendReaction).length, 1);
+});
+
 test("inspect returns only own ordinary choices and aggregate counts, never feedback authors", async () => {
   const f = harness([full(), messages(message([["👍", 4, 0], ["❤️", 2, null]]))]);
   const result = await f.transport.inspect();

@@ -5,7 +5,7 @@ import { assertPilotPrivateDirectory, isPilotDeliveryDiagnostic, type PilotDeliv
 import { copyTelegramTextEntities, type TelegramTextEntity } from "./telegram-text-format.js";
 import { encryptSession, decryptSession } from "./session-crypto.js";
 import type { PilotBinding, PilotPrimary } from "./pilot-telegram-adapter.js";
-import type { StandingContext, StandingContextMessage } from "./standing-context.js";
+import { STANDING_INCOMING_TEXT_BYTES, type StandingContext, type StandingContextMessage } from "./standing-context.js";
 
 export class StandingDialogueJournalError extends Error {
   constructor() { super("STANDING_DIALOGUE_JOURNAL_REFUSED"); }
@@ -41,7 +41,7 @@ function validateQuestion(value: DialogueQuestion, binding: PilotBinding): void 
   if (!value || !keys(value, ["primary", ...(value.source ? ["source"] : []), ...(value.context ? ["context"] : [])])) fail();
   const p = value.primary;
   if (!p || !keys(p, ["chatId", "ownerId", "messageId", "text"]) || p.chatId !== binding.peerId || !validId(p.messageId) ||
-      !/^[1-9]\d{0,19}$/.test(p.ownerId) || p.ownerId === binding.accountId || !text(p.text, 4096)) fail();
+      !/^[1-9]\d{0,19}$/.test(p.ownerId) || p.ownerId === binding.accountId || !text(p.text, STANDING_INCOMING_TEXT_BYTES)) fail();
   if (value.source && (!keys(value.source, ["date", "displayName"]) || !Number.isSafeInteger(value.source.date) || value.source.date <= 0 || !text(value.source.displayName, 512))) fail();
   if (!value.context) return;
   const c = value.context;
@@ -51,13 +51,20 @@ function validateQuestion(value: DialogueQuestion, binding: PilotBinding): void 
       !["complete", "partial", "missing", "truncated", "unavailable"].includes(c.chainStatus) ||
       !["complete", "partial", "truncated", "unavailable"].includes(c.recentStatus)) fail();
   const checkMessage = (m: StandingContextMessage) => {
-    if (!m || !keys(m, ["chatId", "messageId", "authorId", "author", "displayName", "date", "replyToMessageId", "text"]) ||
+    if (!m || !keys(m, ["chatId", "messageId", "authorId", "author", "displayName", "date", "replyToMessageId", "text", ...(Object.hasOwn(m, "forwarded") ? ["forwarded"] : [])]) ||
         m.chatId !== binding.peerId || !validId(m.messageId) || !/^[1-9]\d{0,19}$/.test(m.authorId) ||
-        m.author !== (m.authorId === binding.accountId ? "self" : "user") || !text(m.displayName, 512) || !text(m.text, 4096) ||
+        m.author !== (m.authorId === binding.accountId ? "self" : "user") || !text(m.displayName, 512) || !text(m.text, STANDING_INCOMING_TEXT_BYTES) ||
         !Number.isSafeInteger(m.date) || m.date <= 0 || !(m.replyToMessageId === null || validId(m.replyToMessageId) && m.replyToMessageId < m.messageId)) fail();
+    if (Object.hasOwn(m, "forwarded")) {
+      const f = m.forwarded;
+      if (!f || !keys(f, ["originalDate", "sourceName"]) || !Number.isSafeInteger(f.originalDate) || f.originalDate <= 0 || f.originalDate > 253402300799 ||
+          (f.sourceName !== null && (!text(f.sourceName, 128) || f.sourceName.trim() !== f.sourceName || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(f.sourceName)))) fail();
+    }
   };
   checkMessage(c.primary);
-  if (c.primary.messageId !== p.messageId || c.primary.authorId !== p.ownerId || c.primary.text !== p.text || c.primary.author !== "user") fail();
+  // A forward can supply context but can never become a selected participant
+  // request. Keep its provenance inside immutable context for later readers.
+  if (Object.hasOwn(c.primary, "forwarded") || c.primary.messageId !== p.messageId || c.primary.authorId !== p.ownerId || c.primary.text !== p.text || c.primary.author !== "user") fail();
   if (value.source && (value.source.date !== c.primary.date || value.source.displayName !== c.primary.displayName)) fail();
   const seen = new Set([p.messageId]); let next = c.primary.replyToMessageId;
   for (const m of c.replyChain) { checkMessage(m); if (m.messageId !== next || seen.has(m.messageId) || m.date > c.primary.date) fail(); seen.add(m.messageId); next = m.replyToMessageId; }

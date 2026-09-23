@@ -29,7 +29,7 @@ async function fixture(t: TestContext, createParents = true) {
   return { root, directories, args, openReader };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-async function producePilot(f: Fixture, unknown = false, withDialogue = false, text = "Synthetic verified reply") {
+async function producePilot(f: Fixture, unknown = false, withDialogue = false, text = "Synthetic verified reply", questionText = "Synthetic question") {
   const slot = randomUUID(), directory = join(f.directories.pilot, slot);
   const reply: PilotReply = { chatId: binding.chatId, replyToMessageId: 789, text, entities: [{ type: "bold", offset: 0, length: 9 }] };
   const result = await runPilotReply({ approved: { ...binding, replyToMessageId: 789, maximumTextBytes: 4096 }, reply,
@@ -39,7 +39,7 @@ async function producePilot(f: Fixture, unknown = false, withDialogue = false, t
   assert.equal(result.state, unknown ? "unknown" : "verified");
   if (withDialogue) {
     const journal = await openStandingDialogueJournal({ directory: f.directories.dialogues, passphrase, binding: { accountId: binding.accountId, peerId: binding.chatId } });
-    try { const claim = await journal.recordQuestion({ primary: { chatId: binding.chatId, ownerId: "456", messageId: 789, text: "Synthetic question" }, source: { date: 1500, displayName: "Synthetic person" } });
+    try { const claim = await journal.recordQuestion({ primary: { chatId: binding.chatId, ownerId: "456", messageId: 789, text: questionText }, source: { date: 1500, displayName: "Synthetic person" } });
       await journal.recordModelAdmission({ key: claim.key, attemptRef: "synthetic-attempt" });
       await journal.recordOutcome({ key: claim.key, delivery: unknown ? "unknown" : "verified", kind: "model", answer: reply.text, entities: reply.entities! });
     } finally { journal.close(); }
@@ -80,6 +80,23 @@ async function produceAction(f: Fixture, unknown = false) {
   const slot = standingActionKey(actionBinding); return { family: "bound-action" as const, slot, directory: join(f.directories.actions, slot) };
 }
 const producers = [producePilot, produceImage, produceArtifact, produceAction] as const;
+test("long Russian stored question still joins its verified bounded answer after reopen", async t => {
+  const f = await fixture(t), source = await producePilot(f, false, true, "Synthetic verified reply", "я".repeat(4095) + " конец");
+  const reader = await f.openReader(), result = await reader.read({ family: source.family, slot: source.slot });
+  assert.equal(result.status, "ready");
+  assert.deepEqual(result.view?.content, { kind: "text", text: source.reply.text });
+});
+
+test("cold own-action reader accepts verified standalone task evidence without changing original identity", async t => {
+  const f = await fixture(t), slot = randomUUID(), reply = { chatId: binding.chatId, replyToMessageId: 789, text: "Saved task result" };
+  const result = await runPilotReply({ approved: { ...binding, replyToMessageId: 789, maximumTextBytes: 4096, taskReplyPolicy: "standalone-if-exact-missing" }, reply,
+    store: createEncryptedPilotStore(join(f.directories.pilot, slot), passphrase), signal: new AbortController().signal, killSwitchEngaged: () => false,
+    transport: { async sendOnce() { return { messageId: 800 }; }, async readExact() { return { ...reply, replyToMessageId: null,
+      taskReplyOriginMessageId: 789, accountId: binding.accountId, messageId: 800 }; } } });
+  assert.equal(result.state, "verified");
+  const reader = await f.openReader(), reopened = await reader.read({ family: "pilot", slot });
+  assert.equal(reopened.status, "ready"); assert.equal(reopened.view?.verdict, "verified"); assert.equal(reopened.view?.identityKnown, true);
+});
 
 test("actual encrypted producers for every family yield bounded metadata views without raw capabilities", async t => {
   const f = await fixture(t), reader = await f.openReader();

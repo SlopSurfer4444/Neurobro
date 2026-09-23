@@ -29,6 +29,29 @@ function taskState(): StandingSharedTask {
     outputPrepared: true, nodeCommitted: true, modelOutcome: "unknown", delivery: "not-attempted", disposition: "none" };
 }
 
+test("quoted forwarded observations survive exact projection but cannot become explicit preferences", () => {
+  const forwarded = { originalDate: 90, sourceName: "Outside author", interpretation: "quoted-source-not-request" as const };
+  const m = { ...observation(), forwarded };
+  const source = { ...input(), chronicle: { items: [m], coverage: available } };
+  const snapshot = projectStandingSharedContext(source), projected = snapshot.items[0]!.evidence as StandingSharedObservation;
+  assert.deepEqual(projected, m); assert.equal(Object.isFrozen(projected.forwarded), true);
+  assert.notEqual(snapshot.revisionRef, projectStandingSharedContext({ ...source,
+    chronicle: { items: [{ ...m, forwarded: { ...forwarded, sourceName: null } }], coverage: available } }).revisionRef);
+  forwarded.sourceName = "Changed outside snapshot";
+  assert.equal(projected.forwarded!.sourceName, "Outside author");
+  assert.throws(() => projectStandingSharedContext({ ...source,
+    chronicle: { items: [{ ...m, kind: "explicit-preference" }], coverage: available } }));
+  let called = false;
+  const hostile = { ...forwarded, get sourceName() { called = true; return "Outside author"; } };
+  for (const bad of [null, { ...forwarded, interpretation: "participant-request" }, { ...forwarded, originalDate: 0 },
+    { ...forwarded, originalDate: 253402300800 }, { ...forwarded, sourceName: " " }, { ...forwarded, sourceName: "x".repeat(129) },
+    { ...forwarded, sourceName: "author\u202e" }, { ...forwarded, authority: "team" }, hostile]) {
+    assert.throws(() => projectStandingSharedContext({ ...source,
+      chronicle: { items: [{ ...m, forwarded: bad }], coverage: available } } as unknown as StandingSharedContextInput));
+  }
+  assert.equal(called, false);
+});
+
 test("unavailable task records remain unknown rather than asserting that no output or node exists", () => {
   const unknown: StandingSharedTask = { ...taskState(), outputPrepared: "unavailable", nodeCommitted: "unavailable",
     analysis: "unavailable", modelOutcome: "unavailable", delivery: "unavailable" };
@@ -67,6 +90,16 @@ test("same immutable snapshot feeds both consumers, with exact included-content 
   assert.throws(() => { (responseView.items[0]!.evidence as {text:string}).text = "changed"; });
   (source.chronicle.items[0] as {text:string}).text = "source edited after snapshot";
   assert.equal((responseView.items[0]!.evidence as StandingSharedObservation).text, "Observed group discussion");
+});
+
+test("task source label survives bounded shared memory while routing fields refuse",()=>{
+  const description={objective:"Month report",fromDate:100,toDate:200,timezone:"UTC",source:"community" as const};
+  const source={...input(),tasks:{items:[{...taskState(),description}],coverage:available}};
+  const snapshot=projectStandingSharedContext(source);
+  assert.equal((snapshot.items[0]!.evidence as StandingSharedTask).description?.source,"community");
+  for(const bad of [{...description,source:"elsewhere"},{...description,peerId:"-1001"}]){
+    assert.throws(()=>projectStandingSharedContext({...source,tasks:{...source.tasks,items:[{...taskState(),description:bad}]}} as StandingSharedContextInput));
+  }
 });
 test("content, coverage, audience and asOf changes bind revision independently of caller labels", () => {
   const original = { ...input(), chronicle: { items: [observation()], coverage: available } };

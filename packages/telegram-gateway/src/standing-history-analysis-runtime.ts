@@ -1,15 +1,18 @@
+import { STANDING_HISTORY_REPORT_REVIEW_SCHEMA } from "./standing-history-report-quality.js";
+import { MATERIAL_BYTES, MAX_FRAGMENTS, MAX_ANALYSIS_NODES, MAX_SUPPORTS, SUMMARY_BYTES, MAX_CLAIMS, NODE_PLAIN_BYTES } from "./standing-history-analysis-limits.js";
+import { ANALYSIS_TOOL_TEXT_BYTES, ANALYSIS_TOOL_RESULT_BYTES } from "./standing-tool-dispatcher.js";
 import { createHash } from "node:crypto";
 import { types } from "node:util";
 import type { EpochExtraTool, EpochToolResult, EpochToolScope } from "./standing-tool-dispatcher.js";
-import { snapshotStandingHistoryTaskIntent, type StandingHistoryTaskIntent, type StandingHistoryTaskStore } from "./standing-history-task-store.js";
+import { snapshotStandingHistoryTaskIntent, standingHistoryTaskSourcePeerId, type StandingHistoryTaskIntent, type StandingHistoryTaskStore } from "./standing-history-task-store.js";
 import type { StandingHistoryTaskControlStore } from "./standing-history-task-control-store.js";
-import { snapshotStandingHistoryAnalysisOutput, validateStandingHistoryShownOutput, type StandingHistoryAnalysisStore, type StandingHistoryAnalysisSupport } from "./standing-history-analysis-store.js";
+import { snapshotStandingHistoryAnalysisOutput, validateStandingHistoryShownOutput, StandingHistoryAnalysisStoreError, type StandingHistoryAnalysisStore, type StandingHistoryAnalysisSupport } from "./standing-history-analysis-store.js";
 import type { StandingHistoryAnalysisAttemptPlan, StandingHistoryAnalysisAttemptStore } from "./standing-history-analysis-attempt-store.js";
-import type { StandingHistoryAnalysisPlan } from "./standing-history-analysis-planner.js";
+import type { StandingHistoryAnalysisPlan, StandingHistorySourceBatch } from "./standing-history-analysis-planner.js";
 import type { StandingHistorySourceFragment } from "./standing-history-source-projection.js";
 import { readNodeNotes, type StandingHistoryMergeView, type StandingHistoryNodeNotes } from "./standing-history-analysis-view.js";
 
-export type StandingHistoryAnalysisRuntimeMaterial = StandingHistorySourceFragment | StandingHistoryMergeView;
+export type StandingHistoryAnalysisRuntimeMaterial = StandingHistorySourceFragment | StandingHistorySourceBatch | StandingHistoryMergeView;
 type ActionPlan = Extract<StandingHistoryAnalysisPlan, { kind: "leaf" | "merge" }>;
 const fail = (): never => { throw new Error("STANDING_HISTORY_ANALYSIS_RUNTIME_INPUT"); };
 const ref = (v: unknown, prefix: string): v is string => typeof v === "string" && new RegExp("^" + prefix + "_[0-9a-f]{48}$", "u").test(v);
@@ -21,7 +24,7 @@ function fields(value: unknown, required: readonly string[], optional: readonly 
   if (required.some(k => !Object.hasOwn(ds, k)) || keys.some(k => typeof k !== "string" || !required.includes(k) && !optional.includes(k))) return fail();
   return Object.fromEntries(keys.map(k => { const d = ds[k as string]!; if (!("value" in d) || !d.enumerable) return fail(); return [k, d.value]; }));
 }
-function snapshot<T>(value: T, maximum = 262144): T {
+function snapshot<T>(value: T, maximum = NODE_PLAIN_BYTES): T {
   let remaining = maximum;
   function visit(v: unknown, depth: number): unknown {
     if (--remaining < 0 || depth > 32) return fail();
@@ -32,7 +35,7 @@ function snapshot<T>(value: T, maximum = 262144): T {
     const isArray = Array.isArray(v), proto = Object.getPrototypeOf(v);
     if (isArray ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return fail();
     const keys = Reflect.ownKeys(v), result: object = isArray ? [] : {};
-    if (isArray && (Object.getOwnPropertyDescriptor(v, "length")!.value > 4096 || keys.length !== Object.getOwnPropertyDescriptor(v, "length")!.value + 1)) return fail();
+    if (isArray && (Object.getOwnPropertyDescriptor(v, "length")!.value > MAX_SUPPORTS || keys.length !== Object.getOwnPropertyDescriptor(v, "length")!.value + 1)) return fail();
     for (const k of keys) {
       if (isArray && k === "length") continue;
       if (typeof k !== "string" || k === "__proto__" || isArray && !/^(?:0|[1-9]\d*)$/u.test(k)) return fail();
@@ -59,7 +62,7 @@ function supportCopy(value: unknown): StandingHistoryAnalysisSupport {
 }
 const supportKey = (s: StandingHistoryAnalysisSupport) => s.sourceRef + ":" + s.versionRef;
 function noteSupports(notes: StandingHistoryNodeNotes): readonly StandingHistoryAnalysisSupport[] {
-  if (!ref(notes.nodeRef, "hnode") || !digest(notes.nodeHash) || !Array.isArray(notes.claims) || notes.claims.length > 16) return fail();
+  if (!ref(notes.nodeRef, "hnode") || !digest(notes.nodeHash) || !Array.isArray(notes.claims) || notes.claims.length > MAX_CLAIMS) return fail();
   const supports: StandingHistoryAnalysisSupport[] = [];
   for (const claim of notes.claims) { if (!Array.isArray(claim.supports) || claim.supports.length > 16) return fail(); for (const s of claim.supports) supports.push(supportCopy(s)); }
   return Object.freeze(supports);
@@ -67,24 +70,35 @@ function noteSupports(notes: StandingHistoryNodeNotes): readonly StandingHistory
 function materialCopy(value: unknown): StandingHistoryAnalysisRuntimeMaterial {
   const material = snapshot(value) as StandingHistoryAnalysisRuntimeMaterial;
   if (material.schema === "standing-history-source-fragment-v1") {
-    fields(material, ["schema", "materialRef", "pageHash", "pageIndex", "fromDate", "toDate", "rows", "range", "nextPosition", "coverage", "limitations"]);
+    fields(material, ["schema", "materialRef", "pageHash", "pageIndex", "fromDate", "toDate", "rows", "range", "nextPosition", "coverage", "limitations"], ["sourceRef", "sourceInterpretation"]);
+    if ((Object.hasOwn(material, "sourceRef") || Object.hasOwn(material, "sourceInterpretation")) &&
+        (material.sourceRef !== "community" || material.sourceInterpretation !== "quoted-source-not-request")) return fail();
     if (!ref(material.materialRef, "hmat") || !digest(material.pageHash) || !Number.isInteger(material.pageIndex) || material.pageIndex < 1 || material.pageIndex > 1024 || !Array.isArray(material.rows) || material.rows.length > 100) return fail();
     for (const row of material.rows) { supportCopy({ sourceRef: row.sourceRef, versionRef: row.versionRef }); if (!["included", "nonText", "invalidText", "unavailable", "outsidePeriod"].includes(row.disposition)) return fail(); }
+  } else if (material.schema === "standing-history-source-batch-v1") {
+    fields(material, ["schema", "fragments"]);
+    if (!Array.isArray(material.fragments) || material.fragments.length < 2 || material.fragments.length > MAX_FRAGMENTS) return fail();
+    const seen = new Set<string>();
+    for (const item of material.fragments) {
+      const fragment = materialCopy(item);
+      if (fragment.schema !== "standing-history-source-fragment-v1" || seen.has(fragment.materialRef)) return fail();
+      seen.add(fragment.materialRef);
+    }
   } else if (material.schema === "standing-history-merge-view-v1") {
     fields(material, ["schema", "children", "detailCoverage", "claimsStatus"]);
-    if (!Array.isArray(material.children) || material.children.length !== 2 || material.claimsStatus !== "model-authored-unverified" ||
+    if (!Array.isArray(material.children) || material.children.length < 2 || material.children.length > MAX_ANALYSIS_NODES || material.claimsStatus !== "model-authored-unverified" ||
         material.detailCoverage !== (material.children.some(child => child.detailCoverage === "partial") ? "partial" : "complete")) return fail();
     for (const child of material.children) noteSupports(child);
-    if (material.children[0].nodeRef === material.children[1].nodeRef) return fail();
+    if (new Set(material.children.map(child => child.nodeRef)).size !== material.children.length) return fail();
   } else return fail();
-  if (Buffer.byteLength(JSON.stringify(material)) > 49152) return fail(); return material;
+  if (Buffer.byteLength(JSON.stringify(material)) > MATERIAL_BYTES) return fail(); return material;
 }
 
 /** Call before reservation. Host planner/store provenance authenticates source;
  * a matching hash alone does not. This snapshots and measures the exact view
  * which will be returned, never silently crops/reprojects reserved material. */
 export function prepareStandingHistoryAnalysisMaterial(value: ActionPlan): Readonly<{ material: StandingHistoryAnalysisRuntimeMaterial; modelInputHash: string }> {
-  const p = fields(value, ["kind", "sourceHead", "expectedHead"], ["inputs", "material", "children", "materials"]);
+  const p = fields(value, ["kind", "sourceHead", "expectedHead"], ["inputs", "material", "children", "materials", "viewMaxBytes"]);
   let material: StandingHistoryAnalysisRuntimeMaterial;
   if (p.kind === "leaf" && !Object.hasOwn(p, "children") && !Object.hasOwn(p, "materials")) material = materialCopy(p.material);
   else if (p.kind === "merge" && !Object.hasOwn(p, "inputs") && !Object.hasOwn(p, "material")) {
@@ -95,19 +109,259 @@ export function prepareStandingHistoryAnalysisMaterial(value: ActionPlan): Reado
   return Object.freeze({ material, modelInputHash: hash(material) });
 }
 
-const supportSchema = { type: "object", additionalProperties: false, properties: { sourceRef: { type: "string", pattern: "^hsrc_[0-9a-f]{48}$" }, versionRef: { type: "string", pattern: "^hver_[0-9a-f]{48}$" } }, required: ["sourceRef", "versionRef"] };
 export const ANALYSIS_TOOL_SPECS = snapshot([
-  { type: "function" as const, name: "neurobro_analysis_material", description: "Read the host-selected material for this analysis attempt. Coverage and omitted detail are explicit; stored model notes are unverified. No other task or source can be selected.", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } },
-  { type: "function" as const, name: "neurobro_analysis_notes", description: "Read bounded notes of an immediate child in the current merge. Use only its supplied nodeRef and nextPosition; null starts its notes. Omitted notes are not shown or analyzed by this call.", inputSchema: { type: "object", properties: { nodeRef: { type: "string", pattern: "^hnode_[0-9a-f]{48}$" }, position: { type: ["string", "null"], pattern: "^hnpos_(?:0|[1-9][0-9]{0,3})_(?:0|[1-9][0-9]?)_[0-9a-f]{48}$" } }, required: ["nodeRef", "position"], additionalProperties: false } },
-  { type: "function" as const, name: "neurobro_analysis_commit", description: "Save one bounded analysis node for the current host-owned attempt. Summary is at most4096 UTF8 bytes; each claim text at most1024 UTF8 bytes. Supports must be exact source/version pairs shown in this attempt. Saving notes does not prove their truth, full archive coverage or Telegram delivery.", inputSchema: { type: "object", properties: { output: { type: "object", additionalProperties: false, properties: {
-    summary: { type: "string", minLength: 1, maxLength: 4096 }, claims: { type: "array", maxItems: 16, items: { type: "object", additionalProperties: false, properties: {
-      kind: { type: "string", enum: ["reported", "decision", "open-question", "inference"] }, text: { type: "string", minLength: 1, maxLength: 1024 }, supports: { type: "array", minItems: 1, maxItems: 16, uniqueItems: true, items: supportSchema } }, required: ["kind", "text", "supports"] } },
-    omittedDetailCount: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER } }, required: ["summary", "claims"] } }, required: ["output"], additionalProperties: false } }
+  {
+    "type": "function" as const,
+    "name": "neurobro_analysis_material",
+    "description": "Read the host-selected material for this analysis attempt. Coverage and omitted detail are explicit; stored model notes are unverified. No other task or source can be selected.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "purpose": {
+          "type": "string",
+          "enum": [
+            "neutral-period-notes",
+            "period-advisory",
+            "final-report-source",
+            "final-report-candidate"
+          ]
+        },
+        "pageIndex": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "position": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^hpos_(?:0|[1-9][0-9]{0,2})_[0-9a-f]{48}$"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "type": "function" as const,
+    "name": "neurobro_analysis_notes",
+    "description": "Read bounded notes of a supplied child in a merge or an advertised bound node in final-report synthesis. Use only its supplied nodeRef and nextPosition; null starts its notes. Omitted notes are not shown or analyzed by this call.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nodeRef": {
+          "type": "string",
+          "pattern": "^hnode_[0-9a-f]{48}$"
+        },
+        "position": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^hnpos_(?:0|[1-9][0-9]{0,4})_(?:0|[1-9][0-9]{0,2})_[0-9a-f]{48}$"
+        }
+      },
+      "required": [
+        "nodeRef",
+        "position"
+      ]
+    }
+  },
+  {
+    "type": "function" as const,
+    "name": "neurobro_analysis_commit",
+    "description": "Save one bounded analysis node, exclusive finalReport body for kind final-report, or exclusive reportReview verdict for kind final-report-review, for the current host-owned attempt. Final report body is at most32768 UTF8 bytes and is distinct from internal notes. Summary is at most32768 UTF8 bytes; each claim text at most1024 UTF8 bytes. Supports must be exact source/version pairs shown in this attempt. Saving notes does not prove their truth, full archive coverage or Telegram delivery.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": SUMMARY_BYTES
+            },
+            "claims": {
+              "type": "array",
+              "maxItems": MAX_CLAIMS,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "reported",
+                      "decision",
+                      "open-question",
+                      "inference"
+                    ]
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "supports": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "sourceRef": {
+                          "type": "string",
+                          "pattern": "^hsrc_[0-9a-f]{48}$"
+                        },
+                        "versionRef": {
+                          "type": "string",
+                          "pattern": "^hver_[0-9a-f]{48}$"
+                        }
+                      },
+                      "required": [
+                        "sourceRef",
+                        "versionRef"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text",
+                  "supports"
+                ]
+              }
+            },
+            "omittedDetailCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "summary",
+            "claims"
+          ]
+        },
+        "neutralOutput": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inputHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "output": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "summary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": SUMMARY_BYTES
+                },
+                "claims": {
+                  "type": "array",
+                  "maxItems": MAX_CLAIMS,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "reported",
+                          "decision",
+                          "open-question",
+                          "inference"
+                        ]
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "supports": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 16,
+                        "uniqueItems": true,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "sourceRef": {
+                              "type": "string",
+                              "pattern": "^hsrc_[0-9a-f]{48}$"
+                            },
+                            "versionRef": {
+                              "type": "string",
+                              "pattern": "^hver_[0-9a-f]{48}$"
+                            }
+                          },
+                          "required": [
+                            "sourceRef",
+                            "versionRef"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "text",
+                      "supports"
+                    ]
+                  }
+                },
+                "omittedDetailCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "summary",
+                "claims"
+              ]
+            }
+          },
+          "required": [
+            "inputHash",
+            "output"
+          ]
+        },
+        "reportReview": STANDING_HISTORY_REPORT_REVIEW_SCHEMA,
+        "finalReport": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32768
+            }
+          },
+          "required": [
+            "body"
+          ]
+        }
+      },
+      "required": []
+    }
+  }
 ]);
+
 const result = (success: boolean, value: unknown): EpochToolResult => {
-  const text = JSON.stringify(value); if (Buffer.byteLength(text) > 49152) return fail();
+  const text = JSON.stringify(value); if (Buffer.byteLength(text) > ANALYSIS_TOOL_TEXT_BYTES) return fail();
   const output: EpochToolResult = Object.freeze({ success, contentItems: Object.freeze([Object.freeze({ type: "inputText", text })]) as EpochToolResult["contentItems"] });
-  if (Buffer.byteLength(JSON.stringify(output)) > 131584) return fail(); return output;
+  if (Buffer.byteLength(JSON.stringify(output)) > ANALYSIS_TOOL_RESULT_BYTES) return fail(); return output;
 };
 const refused = (code: string) => result(false, { schema: "neurobro-history-analysis-error-v1", code });
 type Pending = { name: string; resultHash: string; supports: readonly StandingHistoryAnalysisSupport[]; material: boolean; acknowledged: boolean };
@@ -154,7 +408,7 @@ export function createStandingHistoryAnalysisRuntime(input: Readonly<{
     if (c.storage !== "ready" || c.state !== "queued" || c.revision !== 0 || c.headHash !== turn.controlHead) return fail();
     const s = fields(snapshot(await sourceStatus()), ["storage", "readProgress", "modelProgress", "limits"]); guard(turn);
     const p = fields(s.readProgress, ["committedPages", "checkpoint", "chainHash"]), checkpoint = p.checkpoint as Record<string, unknown>;
-    if (s.storage !== "ready" || p.chainHash !== turn.plan.sourceHead || checkpoint.accountId !== intent.accountId || checkpoint.chatId !== intent.chatId || checkpoint.fromDate !== intent.fromDate || checkpoint.toDate !== intent.toDate) return fail();
+    if (s.storage !== "ready" || p.chainHash !== turn.plan.sourceHead || checkpoint.accountId !== intent.accountId || checkpoint.chatId !== standingHistoryTaskSourcePeerId(intent) || checkpoint.fromDate !== intent.fromDate || checkpoint.toDate !== intent.toDate) return fail();
     const a = fields(snapshot(await analysisStatus()), ["storage", "headHash", "analysisNodes", "leafNodes", "claims", "limits"]); guard(turn);
     if (a.storage !== "ready" || a.headHash !== turn.plan.expectedHead || a.analysisNodes !== turn.plan.nodeIndex - 1) return fail();
   }
@@ -179,14 +433,16 @@ export function createStandingHistoryAnalysisRuntime(input: Readonly<{
     let parsed: Record<string, unknown>;
     try {
       parsed = name === "neurobro_analysis_material" ? fields(value, []) : name === "neurobro_analysis_notes" ? fields(value, ["nodeRef", "position"]) : fields(value, ["output"]);
-      if (name === "neurobro_analysis_notes" && (!ref(parsed.nodeRef, "hnode") || parsed.position !== null && (typeof parsed.position !== "string" || !/^hnpos_(?:0|[1-9]\d{0,3})_(?:0|[1-9]\d?)_[0-9a-f]{48}$/u.test(parsed.position)))) return stage(turn, callRef, name, refused("invalid-arguments"));
+      if (name === "neurobro_analysis_notes" && (!ref(parsed.nodeRef, "hnode") || parsed.position !== null && (typeof parsed.position !== "string" || !/^hnpos_(?:0|[1-9]\d{0,4})_(?:0|[1-9]\d{0,2})_[0-9a-f]{48}$/u.test(parsed.position)))) return stage(turn, callRef, name, refused("invalid-arguments"));
       if (name === "neurobro_analysis_commit") parsed = { output: snapshotStandingHistoryAnalysisOutput(parsed.output) };
     } catch { return stage(turn, callRef, name, refused("invalid-arguments")); }
     const stopCall = () => { if (current === turn) void finish(); }; callSignal.addEventListener("abort", stopCall, { once: true });
     const pending = Promise.resolve().then(async () => {
       guard(turn); if (callSignal.aborted) return refused("stopped"); await heads(turn);
       if (name === "neurobro_analysis_material") {
-        const supports = turn.material.schema === "standing-history-source-fragment-v1" ? turn.material.rows.filter(row => row.disposition === "included").map(row => supportCopy({ sourceRef: row.sourceRef, versionRef: row.versionRef })) : turn.material.children.flatMap(child => noteSupports(child));
+        const supports = turn.material.schema === "standing-history-merge-view-v1" ? turn.material.children.flatMap(child => noteSupports(child)) :
+          (turn.material.schema === "standing-history-source-fragment-v1" ? [turn.material] : turn.material.fragments)
+            .flatMap(fragment => fragment.rows.filter(row => row.disposition === "included").map(row => supportCopy({ sourceRef: row.sourceRef, versionRef: row.versionRef })));
         return stage(turn, callRef, name, result(true, turn.material), Object.freeze(supports), true);
       }
       if (name === "neurobro_analysis_notes") {
@@ -199,7 +455,16 @@ export function createStandingHistoryAnalysisRuntime(input: Readonly<{
         await heads(turn); return stage(turn, callRef, name, result(true, notes), noteSupports(notes));
       }
       if (!turn.materialShown) return stage(turn, callRef, name, refused("material-not-shown"));
-      const output = validateStandingHistoryShownOutput(parsed.output, [...turn.shown.values()]);
+      let output: ReturnType<typeof validateStandingHistoryShownOutput>;
+      try { output = validateStandingHistoryShownOutput(parsed.output, [...turn.shown.values()]); }
+      catch (error) {
+        // This exact validation runs before any persistence admission. The model
+        // may correct its references within this turn's remaining call budget.
+        // Never classify a later prepare/commit failure as safely correctable.
+        if (error instanceof StandingHistoryAnalysisStoreError && error.code === "support")
+          return stage(turn, callRef, name, refused("unshown-support"));
+        throw error;
+      }
       // Consume before the first persistence call; an uncertain return must not
       // become a second commit invocation within this native attempt.
       turn.commitStarted = true;
@@ -221,7 +486,13 @@ export function createStandingHistoryAnalysisRuntime(input: Readonly<{
       const plan = snapshot(v.plan) as StandingHistoryAnalysisAttemptPlan, material = materialCopy(v.material);
       if (!digest(plan.sourceHead) || !digest(plan.expectedHead) || !digest(plan.modelInputHash) || !Number.isInteger(plan.nodeIndex) || plan.nodeIndex < 1 || plan.nodeIndex > 1024 || hash(material) !== plan.modelInputHash) return fail();
       if (plan.kind === "leaf") {
-        if (material.schema !== "standing-history-source-fragment-v1" || !Array.isArray(plan.inputs) || plan.inputs.length !== 1 || plan.inputs[0]!.materialRef !== material.materialRef || plan.inputs[0]!.pageIndex !== material.pageIndex || material.fromDate !== intent.fromDate || material.toDate !== intent.toDate) return fail();
+        if (material.schema === "standing-history-merge-view-v1" || !Array.isArray(plan.inputs) || plan.inputs.length < 1 || plan.inputs.length > MAX_FRAGMENTS) return fail();
+        const fragments = material.schema === "standing-history-source-fragment-v1" ? [material] : material.fragments;
+        if (fragments.length !== plan.inputs.length || fragments.some((fragment, index) =>
+          plan.inputs[index]!.materialRef !== fragment.materialRef || plan.inputs[index]!.pageIndex !== fragment.pageIndex ||
+          fragment.fromDate !== intent.fromDate || fragment.toDate !== intent.toDate ||
+          (intent.source ? fragment.sourceRef !== "community" || fragment.sourceInterpretation !== "quoted-source-not-request" :
+            Object.hasOwn(fragment, "sourceRef") || Object.hasOwn(fragment, "sourceInterpretation")))) return fail();
       } else if (plan.kind === "merge") {
         if (material.schema !== "standing-history-merge-view-v1" || !Array.isArray(plan.children) || !equalChildren(plan.children, material.children.map(child => child.nodeRef))) return fail();
       } else return fail();
@@ -239,12 +510,12 @@ export function createStandingHistoryAnalysisRuntime(input: Readonly<{
     onToolResultSent(value) {
       const v = fields(value, ["requestRef", "callRef", "name", "result"]), turn = current;
       if (!turn || !turn.ready || v.requestRef !== turn.requestRef || !scopedRef(v.callRef) || typeof v.name !== "string") return fail(); guard(turn);
-      const pending = turn.pending.get(v.callRef), output = snapshot(v.result, 131584) as EpochToolResult;
+      const pending = turn.pending.get(v.callRef), output = snapshot(v.result, ANALYSIS_TOOL_RESULT_BYTES) as EpochToolResult;
       fields(output, ["success", "contentItems"]);
       if (!pending || turn.callSignals.get(v.callRef)?.aborted || pending.name !== v.name || pending.resultHash !== hash(output)) return fail();
       if (pending.acknowledged) return;
       const shown = new Map(turn.shown); if (output.success) for (const support of pending.supports) shown.set(supportKey(support), support);
-      if (shown.size > 4096) return fail();
+      if (shown.size > MAX_SUPPORTS) return fail();
       turn.shown = shown; pending.acknowledged = true; if (output.success && pending.material) turn.materialShown = true;
     }, finish,
     async close() { closed = true; await finish(); usedAttempts.clear(); signal.removeEventListener("abort", abort); }

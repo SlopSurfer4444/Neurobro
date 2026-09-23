@@ -10,9 +10,9 @@ const spec=(type:BoundPollSpec["type"]="single",anonymous=true):BoundPollSpec=>(
 const operation=(poll=spec()):BoundPollOperation=>({operationId:"fixture-poll-1",randomId:"123456",poll});
 const reject=(code:string,unknown=false)=>(e:unknown)=>e instanceof BoundPollError&&e.code===code&&e.unknown===unknown&&!e.cause&&!e.message.includes("PRIVATE");
 const gate=()=>{let done!:()=>void;const promise=new Promise<void>(r=>{done=r;});return{promise,done};};
-function fixture(basic=false){
+function fixture(basic=false, primaryText="ПРОМПТ poll"){
   const signal=new AbortController(),requests:Api.AnyRequest[]=[],peer=basic?new Api.InputPeerChat({chatId:bigInt(123)}):new Api.InputPeerChannel({channelId:bigInt(123),accessHash:bigInt(987)});
-  const binding={accountId:"789",peerId:utils.getPeerId(peer)},primary={chatId:binding.peerId,ownerId:"456",messageId:91,text:"ПРОМПТ poll"};
+  const binding={accountId:"789",peerId:utils.getPeerId(peer)},primary={chatId:binding.peerId,ownerId:"456",messageId:91,text:primaryText};
   const chat=basic?new Api.Chat({id:bigInt(123),title:"Group",photo:new Api.ChatPhotoEmpty(),date:1,participantsCount:1,version:1}):
     new Api.Channel({id:bigInt(123),accessHash:bigInt(987),title:"Group",photo:new Api.ChatPhotoEmpty(),date:1,megagroup:true});
   let current:Api.Message|undefined,active=true,override:((r:Api.AnyRequest)=>Promise<unknown>)|undefined,primaryValue={...primary};
@@ -54,6 +54,12 @@ test("normal, multiple and quiz polls use installed TL wire with exact own autho
     assert.ok(!JSON.stringify(created.poll).includes("777"));assert.equal(f.requests.filter(r=>r instanceof Api.messages.SendMedia).length,1);assert.equal(f.transport.ownedRecord(),created.record);
     await assert.rejects(f.transport.createOnce(operation()),reject("consumed",true));await f.transport.close();
   }
+});
+test("long Russian incoming request can create a poll without shortening its bound primary", async () => {
+  const f=fixture(false,"ПРОМПТ "+"я".repeat(4000)+" конец");
+  try { assert.equal((await f.transport.createOnce(operation())).poll.own,true);
+    assert.equal(f.requests.filter(r=>r instanceof Api.messages.SendMedia).length,1);
+  } finally {await f.transport.close();}
 });
 test("permission preflight refuses actual default or own poll bans and permits observed administrator override",async()=>{
   for(const basic of [true,false])for(const admin of [false,true]){

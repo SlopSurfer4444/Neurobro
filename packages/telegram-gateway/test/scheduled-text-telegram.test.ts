@@ -41,6 +41,15 @@ function saved(patch: Partial<OwnedScheduledText> = {}): OwnedScheduledText {
 }
 const refused = (unknown?: boolean) => (e: unknown) => e instanceof ScheduledTextError && (unknown === undefined || e.unknown === unknown) && !e.message.includes("private");
 
+test("long Russian incoming request can schedule a bounded reply; outgoing text still refuses over 4096 bytes", async () => {
+  const primary = { ...selected, text: "ПРОМПТ " + "я".repeat(4000) + " конец" };
+  const f = harness([ack(), queue()], { selected: primary, revalidatePrimary: async () => ({ ...primary }) });
+  assert.equal((await f.transport.scheduleOnce()).state, "queued");
+  assert.equal((f.requests[0] as Api.messages.SendMessage).message, operation.text);
+  assert.throws(() => harness([], { selected: primary, operation: { ...operation, text: "я".repeat(2049) } }), refused(false));
+  assert.throws(() => harness([], { selected: { ...primary, text: "я".repeat(8193) } }), refused(false));
+});
+
 test("binary ACK + fresh scheduled read proves queue only and exact self/reply/date/randomId wire", async () => {
   const f = harness([ack(), queue()]); const result = await f.transport.scheduleOnce();
   assert.equal(result.state, "queued"); assert.equal(result.delivery, "unobserved"); assert.deepEqual(result.record, saved());

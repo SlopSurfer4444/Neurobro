@@ -16,9 +16,16 @@ CANARY_SHA256 = "43E9422897B97CE4DC9AACD40494E94D89FD770AD84B9E6361666A6F70D3D96
 NAME = "neurobro_read_history"
 INPUT_CAP, ANSWER_CAP = 24576, 4096
 EVENT_CAP, EVENT_BYTES_CAP = 512, 262144
+# Isolated analysis merges have larger cumulative protocol traffic. This is
+# an aggregate allowance, not a frame/answer/tool-result or RPC budget change.
+ANALYSIS_EVENT_BYTES_CAP = 2097152
 TOOL_TEXT_CAP, TOOL_WIRE_CAP, TOOL_CALL_CAP = 65536, 262144, 8
 TOOL_REPLY_RESERVATION, TOOL_TURN_WIRE_CAP = 131584, 1048576
 TOOL_REFUSAL_CAP, HISTORY_LIFECYCLE_CAP = 4, 2097152
+ANALYSIS_TOOL_TEXT_CAP = 1088 * 1024
+ANALYSIS_TOOL_REPLY_RESERVATION = 2 * ANALYSIS_TOOL_TEXT_CAP + 512
+ANALYSIS_TOOL_TURN_WIRE_CAP = 18 * 1024 * 1024
+ANALYSIS_LIFECYCLE_CAP = 64 * 1024 * 1024
 SESSION_TURN_CAP, WORK_SECONDS = 256, 125.0
 SCHEMA = "decadans.rm0032.native-conversation.v1"
 
@@ -294,6 +301,15 @@ def observer_class(reviewed):
                 if status != "disabled" or params.get("environmentId") is not None:
                     raise reviewed.Stop("CUSTODY_REFUSED", site="account_shape")
                 return
+            if method == "thread/tokenUsage/updated":
+                # Observation only: malformed/missing usage cannot authorize or
+                # resize a budget, and never promotes raw provider fields.
+                if type(params) is dict and params.get("threadId") == self.thread_id and params.get("turnId") == self.turn_id:
+                    usage = params.get("tokenUsage")
+                    keys = {"totalTokens", "inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens"}
+                    if type(usage) is dict and all(type(usage.get(k)) is dict and set(usage[k]) == keys and all(type(v) is int and 0 <= v <= 9007199254740991 for v in usage[k].values()) for k in ("last", "total")) and (usage.get("modelContextWindow") is None or type(usage.get("modelContextWindow")) is int and 0 <= usage["modelContextWindow"] <= 9007199254740991):
+                        self.engine._token_usage = {"last": dict(usage["last"]), "total": dict(usage["total"]), "modelContextWindow": usage.get("modelContextWindow")}
+                return
             # Installed ServerNotification schema marks these as global metadata
             # or invalidation signals. They never authorize a tool or trigger a
             # refresh/action; existing per-event byte/count budgets still apply.
@@ -335,14 +351,22 @@ class NativeConversation:
     All registered tools share existing call/refusal/lifecycle byte budgets.
     thread_config optionally selects the exact trusted analysis overrides and
     three-tool registry; arbitrary configuration/web-enabled analysis is refused.
+    isolation_mode='community-assessment' instead requires those same overrides
+    and an empty extra registry, exposing no dynamic tools at all.
     """
-    def __init__(self, canary_source, *, profile, cwd, tool_spec, instructions, rpc, tool, clock=time.monotonic, extra_tools=(), enable_web=False, thread_config=None):
+    def __init__(self, canary_source, *, profile, cwd, tool_spec, instructions, rpc, tool, clock=time.monotonic, extra_tools=(), enable_web=False, thread_config=None, isolation_mode=None, tool_processing_deadline=False):
         require(type(canary_source) is str and hashlib.sha256(canary_source.encode()).hexdigest().upper() == CANARY_SHA256, "CONFIG_REFUSED", "source")
         require(type(profile) is str and re.fullmatch(r"decadans-[a-z0-9][a-z0-9-]{0,110}", profile), "CONFIG_REFUSED", "config")
         require(type(cwd) is str and re.fullmatch(r"/run/decadans-[A-Za-z0-9_-]+/(?:allowed|workspace)", cwd), "CONFIG_REFUSED", "config")
         require(type(instructions) is str and 1 <= len(instructions.encode()) <= 4096, "CONFIG_REFUSED", "config")
         require(callable(tool) and callable(clock) and all(callable(getattr(rpc, key, None)) for key in ("exchange", "next_frame", "respond")), "CONFIG_REFUSED", "ports")
         require(type(enable_web) is bool, "CONFIG_REFUSED", "config")
+        require(type(tool_processing_deadline) is bool, "CONFIG_REFUSED", "config")
+        self._tool_processing_deadline = tool_processing_deadline
+        require(isolation_mode is None or type(isolation_mode) is str and isolation_mode == "community-assessment", "CONFIG_REFUSED", "config")
+        if isolation_mode is not None:
+            require(thread_config is not None and type(extra_tools) is tuple and not extra_tools and not enable_web, "CONFIG_REFUSED", "config")
+        self._isolation_mode = isolation_mode
         if thread_config is not None:
             require(type(thread_config) is dict and len(thread_config) == 2
                     and all(type(key) is str for key in thread_config)
@@ -355,7 +379,11 @@ class NativeConversation:
         self._enable_web, self._web_counts = enable_web, web_counts()
         self._spec = validate_spec(tool_spec)
         self._specs, self._validators = extra_registry(extra_tools, self._spec)
-        if self._thread_config is not None:
+        if isolation_mode == "community-assessment":
+            # The inert legacy spec is still validated, but grants no exposed
+            # capability. This host-selected mode cannot import any extra tools.
+            self._specs, self._validators = [], {}
+        elif self._thread_config is not None:
             require(tuple(self._validators) == (NAME, "neurobro_analysis_material", "neurobro_analysis_notes", "neurobro_analysis_commit"),
                     "CONFIG_REFUSED", "spec")
             self._specs = self._specs[1:]
@@ -380,6 +408,10 @@ class NativeConversation:
 
     def tool_names(self):
         return tuple(self._validators)
+
+    def token_usage_metadata(self):
+        """Sanitized last observed token counters only; absent telemetry stays None."""
+        return json.loads(encoded(getattr(self, "_token_usage", None)))
 
     def web_metadata(self):
         """Current/last admitted turn counters; no URLs, results or delivery proof."""
@@ -419,14 +451,23 @@ class NativeConversation:
                 and type(active) is dict and active.get("id") == self._reviewed.PROFILE and thread.get("ephemeral") is True, "CONFIG_REFUSED", "thread_ack")
         self._thread = thread["id"]
 
+    def _analysis_scope(self):
+        return self._thread_config is not None and self._isolation_mode != "community-assessment"
+
+    def _lifecycle_cap(self):
+        return ANALYSIS_LIFECYCLE_CAP if self._analysis_scope() else HISTORY_LIFECYCLE_CAP
+
     def _tool_content(self, content):
         require(type(content) is list and len(content) == 1, "TOOL_REFUSED", "tool_result")
         item = content[0]
         require(type(item) is dict and set(item) == {"type", "text"} and item["type"] == "inputText" and type(item["text"]) is str, "TOOL_REFUSED", "tool_result")
-        require(len(item["text"].encode()) <= TOOL_TEXT_CAP, "BOUNDS_REFUSED", "tool_result")
+        require(len(item["text"].encode()) <= (ANALYSIS_TOOL_TEXT_CAP if self._analysis_scope() else TOOL_TEXT_CAP), "BOUNDS_REFUSED", "tool_result")
         try: value = json.loads(item["text"], parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
         except (ValueError, TypeError): raise Refused("TOOL_REFUSED", "tool_result") from None
         require(type(value) is dict, "TOOL_REFUSED", "tool_result")
+
+    def _event_bytes_cap(self):
+        return ANALYSIS_EVENT_BYTES_CAP if self._thread_config is not None and self._isolation_mode != "community-assessment" else EVENT_BYTES_CAP
 
     def _count_frame(self, frame, receipt):
         # Registered results, validated text-file and isolated analysis-commit
@@ -446,18 +487,18 @@ class NativeConversation:
                 candidate=json.loads(encoded(args));before=proof(candidate)
                 if self._validators[value['tool']](candidate) is not True or proof(candidate)!=before:return
             except Exception:return
-            receipt['historyLifecycleBytes']=min(HISTORY_LIFECYCLE_CAP+1,receipt['historyLifecycleBytes']+len(encoded(args['text']))-2)
+            receipt['historyLifecycleBytes']=min(self._lifecycle_cap()+1,receipt['historyLifecycleBytes']+len(encoded(args['text']))-2)
             args['text']=''
         def count_analysis_payload(value):
             if self._thread_config is None or type(value) is not dict or value.get('tool')!='neurobro_analysis_commit' or not self._registered(value.get('tool')) or value.get('namespace') is not None:return
             args=value.get('arguments')
-            if type(args) is not dict or set(args)!={'output'} or type(args['output']) is not dict:return
+            if type(args) is not dict:return
             try:
                 candidate=json.loads(encoded(args));before=proof(candidate)
                 if self._validators[value['tool']](candidate) is not True or proof(candidate)!=before:return
             except Exception:return
-            receipt['historyLifecycleBytes']=min(HISTORY_LIFECYCLE_CAP+1,receipt['historyLifecycleBytes']+len(encoded(args['output']))-2)
-            args['output']={}
+            receipt['historyLifecycleBytes']=min(self._lifecycle_cap()+1,receipt['historyLifecycleBytes']+len(encoded(args)))
+            value['arguments']={}
         def count_payload(value):
             count_text_payload(value)
             count_analysis_payload(value)
@@ -470,10 +511,10 @@ class NativeConversation:
             if type(item) is dict and item.get('type')=='dynamicToolCall':count_payload(item)
             if type(item) is dict and item.get("type") == "dynamicToolCall" and self._registered(item.get("tool")) and item.get("namespace") is None and item.get("contentItems") is not None:
                 self._tool_content(item["contentItems"])
-                receipt["historyLifecycleBytes"] = min(HISTORY_LIFECYCLE_CAP + 1, receipt["historyLifecycleBytes"] + len(encoded(item["contentItems"])) - 2)
+                receipt["historyLifecycleBytes"] = min(self._lifecycle_cap() + 1, receipt["historyLifecycleBytes"] + len(encoded(item["contentItems"])) - 2)
                 item["contentItems"] = []
-        receipt["eventBytes"] = min(EVENT_BYTES_CAP + 1, receipt["eventBytes"] + len(encoded(ordinary)))
-        require(receipt["historyLifecycleBytes"] <= HISTORY_LIFECYCLE_CAP and receipt["eventBytes"] <= EVENT_BYTES_CAP, "BOUNDS_REFUSED", "events")
+        receipt["eventBytes"] = min(self._event_bytes_cap() + 1, receipt["eventBytes"] + len(encoded(ordinary)))
+        require(receipt["historyLifecycleBytes"] <= self._lifecycle_cap() and receipt["eventBytes"] <= self._event_bytes_cap(), "BOUNDS_REFUSED", "events")
 
     def _request(self, frame, turn_id, deadline, receipt):
         require(set(frame) == {"id", "method", "params"} and frame.get("method") == "item/tool/call", "TOOL_REFUSED", "request")
@@ -484,6 +525,8 @@ class NativeConversation:
         require(p.get("threadId") == self._thread and p.get("turnId") == turn_id and self._registered(p.get("tool")) and p.get("namespace") is None, "TOOL_REFUSED", "correlation")
         require(self._reviewed.opaque_id(p.get("callId")) and p["callId"] not in self._seen_calls, "TOOL_REFUSED", "duplicate_call")
         self._seen_ids.add(key); self._seen_calls.add(p["callId"])
+        reply_cap = ANALYSIS_TOOL_REPLY_RESERVATION if self._analysis_scope() else TOOL_REPLY_RESERVATION
+        turn_cap = ANALYSIS_TOOL_TURN_WIRE_CAP if self._analysis_scope() else TOOL_TURN_WIRE_CAP
         refusal = None
         if p["tool"] == NAME:
             try: history_arguments(p["arguments"])
@@ -494,7 +537,7 @@ class NativeConversation:
                 before = proof(args)
                 require(type(args) is dict and self._validators[p["tool"]](args) is True and proof(args) == before, "TOOL_REFUSED", "arguments")
             except Exception: refusal = "invalid-arguments"
-        if receipt["toolCalls"] >= TOOL_CALL_CAP or receipt["toolResultBytes"] + TOOL_REPLY_RESERVATION + (TOOL_REFUSAL_CAP - receipt["toolRefusals"]) * 1024 > TOOL_TURN_WIRE_CAP:
+        if receipt["toolCalls"] >= TOOL_CALL_CAP or receipt["toolResultBytes"] + reply_cap + (TOOL_REFUSAL_CAP - receipt["toolRefusals"]) * 1024 > turn_cap:
             refusal = "read-budget-exhausted" if p["tool"] == NAME else "tool-budget-exhausted"; receipt["toolBudgetExhausted"] = True
         analysis_read = self._thread_config is not None and p["tool"] in {"neurobro_analysis_material", "neurobro_analysis_notes"}
         if analysis_read and self._analysis_reads >= TOOL_CALL_CAP - 1:
@@ -509,12 +552,17 @@ class NativeConversation:
             receipt["toolCalls"] += 1
             if analysis_read: self._analysis_reads += 1
             callback = {**json.loads(encoded(p)), "namespace": None, "requestId": frame["id"]}
-            result = self._tool(callback, min(20.0, self._remaining(deadline)))
+            # The parallel host may perform bounded local processing before it
+            # returns a tool result. Its processing allowance is distinct from
+            # the unchanged twenty-second RPC read/write allowance. Legacy
+            # compositions retain their original callback budget by default.
+            processing_cap = WORK_SECONDS if self._tool_processing_deadline else 20.0
+            result = self._tool(callback, min(processing_cap, self._remaining(deadline)))
             self._remaining(deadline)
         require(type(result) is dict and set(result) == {"success", "contentItems"} and type(result["success"]) is bool, "TOOL_REFUSED", "tool_result")
         self._tool_content(result["contentItems"])
         wire = encoded({"id": frame["id"], "result": result})
-        require(len(wire) <= TOOL_REPLY_RESERVATION and receipt["toolResultBytes"] + len(wire) <= TOOL_TURN_WIRE_CAP, "BOUNDS_REFUSED", "tool_wire")
+        require(len(wire) <= reply_cap and receipt["toolResultBytes"] + len(wire) <= turn_cap, "BOUNDS_REFUSED", "tool_wire")
         receipt["toolResultBytes"] += len(wire)
         self._rpc.respond(frame["id"], json.loads(encoded(result)), min(20.0, self._remaining(deadline)))
         self._remaining(deadline)
@@ -525,7 +573,7 @@ class NativeConversation:
     def _turn_deadline(self):
         # Explicit specialized profiles may override this without changing the
         # text engine's default or mutating a shared module/global clock.
-        return self._clock() + WORK_SECONDS
+        return self._clock() + (30 if self._isolation_mode == "community-assessment" else WORK_SECONDS)
 
     def run(self, text):
         receipt = metadata()
@@ -540,6 +588,7 @@ class NativeConversation:
             require(type(text) is str and text.strip() and "\x00" not in text, "INPUT_REFUSED", "input")
             size = len(text.encode())
             require(1 <= size <= INPUT_CAP, "INPUT_REFUSED", "input")
+            self._token_usage = None
             receipt["inputBytes"] = size
             deadline = self._turn_deadline()
             self._web_counts = web_counts()
@@ -565,7 +614,7 @@ class NativeConversation:
                 require(type(frame) is dict, "TRANSPORT_UNKNOWN", "frame")
                 receipt["eventCount"] += 1
                 self._count_frame(frame, receipt)
-                require(receipt["eventCount"] <= EVENT_CAP and receipt["eventBytes"] <= EVENT_BYTES_CAP, "BOUNDS_REFUSED", "events")
+                require(receipt["eventCount"] <= EVENT_CAP and receipt["eventBytes"] <= self._event_bytes_cap(), "BOUNDS_REFUSED", "events")
                 if "id" in frame: self._request(frame, turn["id"], deadline, receipt)
                 else: observer.event(frame)
             receipt["observer"]["remoteControlStatus"] = observer.remote_control_status
@@ -587,7 +636,7 @@ class NativeConversation:
                     "shape": {key: d["shape"].get(key) is True for key in OBSERVER_SHAPES}, "remoteControlStatus": observer.remote_control_status}
             if observer is not None: receipt["observer"]["remoteControlStatus"] = observer.remote_control_status
             # Native failure-site behavior remains unchanged.
-            sites = {"frame", "spec", "config", "ports", "source", "input", "session", "arguments", "item", "tool_item", "tool_item_correlation", "tool_item_result", "tool_item_changed", "tool_item_missing", "answer", "answer_changed", "answer_missing", "turn", "item_timestamp", "resolved", "deadline", "request_id", "exchange", "thread_ack", "tool_result", "request", "duplicate_request", "correlation", "duplicate_call", "tool_calls", "tool_wire", "turn_ack", "events", "web_item", "web_changed", "web_unfinished"}
+            sites = {"frame", "spec", "config", "ports", "source", "input", "session", "arguments", "item", "tool_item", "tool_item_correlation", "tool_item_result", "tool_item_changed", "tool_item_missing", "answer", "answer_changed", "answer_missing", "turn", "item_timestamp", "resolved", "deadline", "cancelled", "request_id", "exchange", "thread_ack", "tool_result", "request", "duplicate_request", "correlation", "duplicate_call", "tool_calls", "tool_wire", "turn_ack", "events", "web_item", "web_changed", "web_unfinished"}
             site = error.site if isinstance(error, Refused) and type(error.site) is str and error.site in sites else "observer_or_transport"
             receipt["toolBudgetExhausted"] = receipt["toolBudgetExhausted"] or code == "BOUNDS_REFUSED" and site in {"tool_calls", "tool_wire", "tool_result"}
             receipt.update(outcome="unknown" if admitted else "refused", code=code, failureSite=site, sessionPoisoned=self._poisoned)

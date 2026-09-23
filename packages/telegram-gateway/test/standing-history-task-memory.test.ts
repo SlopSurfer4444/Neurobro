@@ -9,6 +9,11 @@ import { requireStandingHistoryTaskContext } from "../src/standing-history-task-
 import { openStandingHistoryTaskManager, type StandingHistoryTaskContextEvent, type StandingHistoryManagedTaskStatus } from "../src/standing-history-task-manager.js";
 import { openStandingHistoryTaskDiscovery } from "../src/standing-history-task-discovery.js";
 import type { StandingHistoryTaskIntent } from "../src/standing-history-task-store.js";
+import { snapshotStandingHistoryTaskProgress, snapshotStandingHistoryTaskProgressEvent,
+  projectStandingHistoryTaskProgress } from "../src/standing-history-task-progress.js";
+import { readStandingSharedContext } from "../src/standing-shared-context-reader.js";
+import { conversationModelInput } from "../src/standing-model-input.js";
+import { projectStandingSharedContext } from "../src/standing-shared-context.js";
 
 const binding = { accountId: "999", peerId: "-100123" }, primary = { chatId: binding.peerId, ownerId: "123", messageId: 1000, text: "Task status?" };
 const scopeRef = "scope_" + "a".repeat(32), observedAt = 1700000000;
@@ -27,6 +32,90 @@ function fixture() {
   const memory = createStandingHistoryTaskMemory({ binding, references, signal: abort.signal, scopeRef });
   return { references, abort, memory, close() { memory.close(); references.close(); } };
 }
+
+test("saved counts and host stall survive invalidation into same-actor bounded model context", () => {
+  const f = fixture();
+  try {
+    // The context adapter consumes authenticated manager statuses in production.
+    const s = { ...status(ref(1)), read: { storage: "ready", readProgress: { committedPages: 24,
+      checkpoint: { inexact: false, undated: 0, status: "more" } } },
+      analysis: { storage: "ready", claims: "model-authored-unverified", analysisNodes: 46 } } as unknown as StandingHistoryManagedTaskStatus;
+    f.memory.observe({ kind: "snapshot", intent: intent(1), status: s }, observedAt);
+    f.memory.observeProgress({ taskRef: ref(1), phase: "stalled", reason: "consumed-without-prepared" }, observedAt + 1);
+    f.memory.invalidate(ref(1));
+    const taskContext = f.memory.forPrimary({ primary, asOf: observedAt + 100 });
+    const bound = readStandingSharedContext({ binding, primary, references: f.references, scopeRef, signal: f.abort.signal,
+      asOf: observedAt + 100, taskContext });
+    const body = conversationModelInput(primary, undefined, f.references, undefined, undefined, bound);
+    const packet = JSON.parse(body), task = packet.contextState.shared.snapshot.items.find((i: any) => i.source === "tasks").evidence;
+    assert.deepEqual(task.savedProgress, { committedPages: 24, analysisNodes: 46, observedAt, freshness: "stale" });
+    assert.deepEqual(task.progress, { phase: "stalled", reason: "consumed-without-prepared", recovery: "needs-settlement",
+      observedAt: observedAt + 1, freshness: "stale", executionAuthorized: false });
+    assert.equal(task.modelOutcome, "unavailable"); assert.equal(task.delivery, "unavailable");
+    assert.equal(task.observedAt, observedAt); assert.equal(taskContext.source.coverage.freshness, "unknown");
+    assert.ok(Buffer.byteLength(JSON.stringify(bound.snapshot)) <= 8192);
+    assert.equal(f.memory.forPrimary({ primary: { ...primary, ownerId: "456" }, asOf: observedAt + 100 }).source.items.length, 0);
+    assert.throws(() => f.memory.forPrimary({ primary, asOf: observedAt }));
+    const clone = structuredClone(bound.snapshot), empty = { items: [], coverage: { availability: "not-configured" as const, freshness: "unknown" as const, scanned: 0, hasMore: null, omittedAtSource: null } };
+    const evidence = clone.items.find(i => i.source === "tasks")!.evidence;
+    assert.throws(() => projectStandingSharedContext({ scope: clone.scope, asOf: observedAt,
+      chronicle: empty, dialogues: empty, ownActions: empty, tasks: { ...taskContext.source, items: [evidence as any] } }));
+  } finally { f.close(); }
+});
+
+test("host observations cannot create tasks, renew saved evidence or survive a new connection", () => {
+  const f = fixture();
+  try {
+    f.memory.observeProgress({ taskRef: ref(1), phase: "analyzing", reason: null }, observedAt);
+    assert.equal(f.memory.forPrimary({ primary, asOf: observedAt }).source.items.length, 0);
+    f.memory.observe(event(1), observedAt);
+    assert.deepEqual(f.memory.forPrimary({ primary, asOf: observedAt }).source.items[0]!.savedProgress,
+      { committedPages: null, analysisNodes: null, observedAt, freshness: "stale" });
+    f.memory.observeProgress({ taskRef: ref(1), phase: "reviewing", reason: null }, observedAt + 1);
+    f.memory.remember(intent(1), observedAt + 2);
+    f.memory.observe(event(1), observedAt + 3);
+    let task = f.memory.forPrimary({ primary, asOf: observedAt + 3 }).source.items[0]!;
+    assert.equal(task.progress!.observedAt, observedAt + 1); assert.equal(task.savedProgress!.observedAt, observedAt + 3);
+    assert.throws(() => f.memory.observeProgress({ taskRef: ref(1), phase: "planning", reason: null }, observedAt));
+    f.memory.observeProgress({ taskRef: ref(1), phase: "stalled", reason: "report-quality-required" }, observedAt + 4);
+    task = f.memory.forPrimary({ primary, asOf: observedAt + 4 }).source.items[0]!;
+    assert.equal(task.progress!.recovery, "review-report");
+    f.memory.close();
+    const next = fixture();
+    try {
+      next.memory.observe(event(1), observedAt + 5);
+      assert.equal(next.memory.forPrimary({ primary, asOf: observedAt + 5 }).source.items[0]!.progress, undefined);
+    } finally { next.close(); }
+  } finally { f.close(); }
+});
+
+test("progress exact schemas reject accessors, unknown reasons, authority and contradictory phases", () => {
+  const good = { taskRef: ref(1), phase: "stalled" as const, reason: "prior-owner-unavailable" as const };
+  const progress = projectStandingHistoryTaskProgress(good, observedAt);
+  assert.equal(snapshotStandingHistoryTaskProgress(progress).recovery, "needs-settlement");
+  let invoked = 0;
+  const accessor = Object.defineProperty({ ...good }, "reason", { enumerable: true, get() { invoked++; return good.reason; } });
+  assert.throws(() => snapshotStandingHistoryTaskProgressEvent(accessor)); assert.equal(invoked, 0);
+  for (const bad of [{ ...good, reason: "raw error text" }, { ...good, phase: "analyzing" }, { ...good, reason: null },
+    { ...good, taskRef: "foreign" }, { ...good, permission: true }, new Proxy(good, {})]) assert.throws(() => snapshotStandingHistoryTaskProgressEvent(bad));
+  for (const bad of [{ ...progress, executionAuthorized: true }, { ...progress, freshness: "current" },
+    { ...progress, recovery: "none" }, { ...progress, observedAt: -1 }]) assert.throws(() => snapshotStandingHistoryTaskProgress(bad));
+});
+
+test("generic persisted report blockage requires status refresh rather than claiming known quality failure", () => {
+  const f = fixture();
+  try {
+    f.memory.observe(event(1), observedAt);
+    f.memory.observeProgress({ taskRef: ref(1), phase: "stalled", reason: "report-quality-required" }, observedAt + 1);
+    assert.equal(f.memory.forPrimary({ primary, asOf: observedAt + 1 }).source.items[0]!.progress!.recovery, "review-report");
+    f.memory.observeProgress({ taskRef: ref(1), phase: "stalled", reason: "report-required" }, observedAt + 2);
+    const generic = f.memory.forPrimary({ primary, asOf: observedAt + 2 }).source.items[0]!.progress!;
+    assert.equal(generic.recovery, "refresh-status"); assert.equal(generic.executionAuthorized, false);
+    assert.throws(() => snapshotStandingHistoryTaskProgress({ ...generic, recovery: "review-report" }));
+    f.memory.observeProgress({ taskRef: ref(1), phase: "stalled", reason: "consumed-without-prepared" }, observedAt + 3);
+    assert.equal(f.memory.forPrimary({ primary, asOf: observedAt + 3 }).source.items[0]!.progress!.recovery, "needs-settlement");
+  } finally { f.close(); }
+});
 test("cold cache is unavailable; reuse preserves original time and binds only current same-actor primary", () => {
   const f = fixture();
   try {
@@ -119,10 +208,12 @@ test("actual encrypted manager observer populates purpose, invalidates cancellat
   const next = { ...primary, messageId: 1001, text: "Next question" };
   let page = first.memory.forPrimary({ primary: next, asOf: observedAt + 1 });
   assert.equal(page.source.items[0]!.description?.objective, "Purpose retained across turns");
+  assert.deepEqual(page.source.items[0]!.savedProgress, { committedPages: 0, analysisNodes: 0, observedAt, freshness: "stale" });
   assert.equal(callbacks, 2);
   await manager.cancel({ taskRef: created.taskRef, requesterId: primary.ownerId });
   page = first.memory.forPrimary({ primary: next, asOf: observedAt + 2 });
   assert.equal(page.source.items[0]!.control, "unavailable"); assert.equal(page.source.items[0]!.description?.objective, "Purpose retained across turns");
+  assert.equal(page.source.items[0]!.savedProgress!.committedPages, 0);
   await manager.close(); first.close();
   const second = fixture();
   manager = await openStandingHistoryTaskManager({ ...args, onObservation(event) { second.memory.observe(event, observedAt + 3); } });

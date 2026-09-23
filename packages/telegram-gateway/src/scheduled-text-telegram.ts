@@ -1,3 +1,4 @@
+import { STANDING_INCOMING_TEXT_BYTES } from "./standing-context.js";
 import { Api, utils } from "telegram";
 import bigInt from "big-integer";
 import type { PilotBinding, PilotInvoker, PilotPrimary } from "./pilot-telegram-adapter.js";
@@ -17,7 +18,7 @@ export class ScheduledTextError extends Error {
 const id = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) > 0 && (n as number) < 2147483647;
 const long = (n: unknown): n is string => typeof n === "string" && /^[1-9]\d{0,18}$/.test(n) && BigInt(n) < 2n ** 63n;
 const absent = (n: unknown) => n === undefined || n === null; // Real TL decode uses null for absent optionals.
-const text = (n: unknown): n is string => typeof n === "string" && n.trim().length > 0 && Buffer.byteLength(n, "utf8") <= 4096 &&
+const text = (n: unknown, maximum = 4096): n is string => typeof n === "string" && n.trim().length > 0 && Buffer.byteLength(n, "utf8") <= maximum &&
   !n.includes("\0") && Buffer.from(n, "utf8").toString("utf8") === n;
 const samePeer = (peer: unknown, expected: string): boolean => { try { return utils.getPeerId(peer as Api.TypePeer) === expected; } catch { return false; } };
 const exact = (v: unknown, keys: string[]): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v) &&
@@ -58,7 +59,7 @@ export function createScheduledTextTelegramTransport(input: {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(operation.operationId) || !long(operation.randomId) || !text(operation.text) || !id(operation.scheduleDate) ||
       !long(binding.accountId) || !/^-[1-9]\d{0,19}$/.test(binding.peerId) || !(input.self instanceof Api.User) || !input.self.self || input.self.bot || input.self.deleted ||
       input.self.id.toString() !== binding.accountId || selected.chatId !== binding.peerId || !long(selected.ownerId) || selected.ownerId === binding.accountId ||
-      !id(selected.messageId) || !text(selected.text) || !(input.peer instanceof Api.InputPeerChat || input.peer instanceof Api.InputPeerChannel) || !samePeer(input.peer, binding.peerId)) return fail("config");
+      !id(selected.messageId) || !text(selected.text, STANDING_INCOMING_TEXT_BYTES) || !(input.peer instanceof Api.InputPeerChat || input.peer instanceof Api.InputPeerChannel) || !samePeer(input.peer, binding.peerId)) return fail("config");
   let peer: Api.InputPeerChat | Api.InputPeerChannel;
   try {
     peer = input.peer instanceof Api.InputPeerChat ? new Api.InputPeerChat({ chatId: bigInt(input.peer.chatId.toString()) }) :

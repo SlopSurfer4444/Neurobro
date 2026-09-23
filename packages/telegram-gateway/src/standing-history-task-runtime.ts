@@ -31,12 +31,14 @@ function control(value: unknown) {
 function publicResult(value: unknown, cancelled: boolean): unknown {
   // Detach inert host data before projection. Never forward raw checkpoints,
   // source IDs, account/requester IDs, heads or filesystem paths to the model.
-  const v = fields(snapshotStandingActionJson(value), cancelled ? ["taskRef", "control", "revocationJoined"] : ["taskRef", "control", "read", "analysis"], cancelled ? [] : ["attempts", "delivery", "disposition"]);
+  const v = fields(snapshotStandingActionJson(value), cancelled ? ["taskRef", "control", "revocationJoined"] : ["taskRef", "control", "read", "analysis"],
+    cancelled ? ["source"] : ["source", "attempts", "delivery", "disposition"]);
   if (typeof v.taskRef !== "string" || !/^htask_[0-9a-f]{48}$/u.test(v.taskRef)) return fail();
+  if (Object.hasOwn(v, "source") && v.source !== "community") return fail();
   const c = control(v.control);
   if (cancelled) {
     if (v.revocationJoined !== true || c.state !== "cancelled" || c.storage !== "ready") return fail();
-    return { schema: "neurobro-history-task-v1", taskRef: v.taskRef, control: c, revocationJoined: true };
+    return { schema: "neurobro-history-task-v1", taskRef: v.taskRef, ...(v.source === "community" ? { source: "community" } : {}), control: c, revocationJoined: true };
   }
   const read = v.read as Record<string, unknown>, analysis = v.analysis as Record<string, unknown>;
   if (!read || !analysis || typeof read !== "object" || typeof analysis !== "object" ||
@@ -79,9 +81,9 @@ function publicResult(value: unknown, cancelled: boolean): unknown {
     const multipart = Object.hasOwn(d, "partsTotal") || Object.hasOwn(d, "verifiedParts") || Object.hasOwn(d, "nextPart");
     if (!multipart && d.state === "partial") return fail();
     if (multipart) {
-      if (d.partsTotal !== 2 || !Number.isInteger(d.verifiedParts) || Number(d.verifiedParts) < 0 || Number(d.verifiedParts) > 2 ||
+      if (!Number.isInteger(d.partsTotal) || Number(d.partsTotal) < 2 || Number(d.partsTotal) > 16 || !Number.isInteger(d.verifiedParts) || Number(d.verifiedParts) < 0 || Number(d.verifiedParts) > Number(d.partsTotal) ||
           !["partial", "verified", "unknown", "failed-terminal"].includes(d.state as string) ||
-          (d.state === "verified" ? d.verifiedParts !== 2 : Number(d.verifiedParts) >= 2) ||
+          (d.state === "verified" ? d.verifiedParts !== d.partsTotal : Number(d.verifiedParts) >= Number(d.partsTotal)) ||
           (d.state === "partial" ? !Object.hasOwn(d, "nextPart") || d.nextPart !== Number(d.verifiedParts) + 1 : Object.hasOwn(d, "nextPart"))) return fail();
       delivery = { state: d.state, consumed: d.consumed, partsTotal: d.partsTotal, verifiedParts: d.verifiedParts,
         ...(d.state === "partial" ? { nextPart: d.nextPart } : {}) };
@@ -91,14 +93,14 @@ function publicResult(value: unknown, cancelled: boolean): unknown {
   if (Object.hasOwn(v, "disposition")) {
     const d = fields(v.disposition, ["storage"], ["reason"]);
     if (d.storage === "ready") {
-      if (!["coverage", "stale", "consumed-without-prepared", "source-page-quota", "overflow"].includes(d.reason as string) || read.storage !== "ready" || analysis.storage !== "ready") return fail();
+      if (!["coverage", "stale", "consumed-without-prepared", "source-page-quota", "report-required", "overflow"].includes(d.reason as string) || read.storage !== "ready" || analysis.storage !== "ready") return fail();
       disposition = { storage: "ready", reason: d.reason };
     } else {
       if (!["absent", "unavailable"].includes(d.storage as string) || Object.hasOwn(d, "reason")) return fail();
       disposition = { storage: d.storage };
     }
   }
-  return { schema: "neurobro-history-task-v1", taskRef: v.taskRef, control: c, read: readView, analysis: analysisView,
+  return { schema: "neurobro-history-task-v1", taskRef: v.taskRef, ...(v.source === "community" ? { source: "community" } : {}), control: c, read: readView, analysis: analysisView,
     ...(attemptsView === undefined ? {} : { attempts: attemptsView }), delivery, ...(disposition === undefined ? {} : { disposition }) };
 }
 

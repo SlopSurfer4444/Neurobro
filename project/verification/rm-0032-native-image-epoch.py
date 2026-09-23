@@ -40,6 +40,7 @@ def create_native_image_epoch(native_module, collector_module, canary_source, **
             self._state_lock = threading.RLock()
             self._epoch_started = self._now()
             self._epoch_deadline = self._epoch_started + EPOCH_SECONDS
+            self._turn_seconds = 30.0 if self._isolation_mode == "community-assessment" else TURN_SECONDS
             self._admitted_deadline = None
             self._attempts = 0
             self._request_ref = None
@@ -75,7 +76,7 @@ def create_native_image_epoch(native_module, collector_module, canary_source, **
             return self._admitted_deadline
 
         def _remaining(self, deadline):
-            n.require(not self._image_closed, "TRANSPORT_UNKNOWN", "deadline")
+            n.require(not self._image_closed, "TRANSPORT_UNKNOWN", "cancelled")
             return super()._remaining(min(deadline, self._epoch_deadline))
 
         def _collect(self, call):
@@ -86,6 +87,8 @@ def create_native_image_epoch(native_module, collector_module, canary_source, **
                 raise n.Refused("BOUNDS_REFUSED" if self._image_failure in {"size", "budget"} else "PROTOCOL_REFUSED", "events") from None
 
         def _project(self, frame, items):
+            if self._isolation_mode == "community-assessment":
+                n.require(not any(type(item) is dict and item.get("type") == "imageGeneration" for item in items), "TOOL_REFUSED", "item")
             raw = n.encoded(frame)
             n.require(len(raw) <= IMAGE_FRAME_BYTES, "BOUNDS_REFUSED", "events")
             images = [item for item in items if type(item) is dict and item.get("type") == "imageGeneration"]
@@ -193,6 +196,7 @@ def create_native_image_epoch(native_module, collector_module, canary_source, **
         def turn(self, request_ref, text, images=None):
             with self._state_lock:
                 if self._image_closed: return self._refusal("SESSION_POISONED")
+                if self._isolation_mode == "community-assessment" and images is not None: return self._refusal("INPUT_REFUSED")
                 if self._running: return self._refusal("BUSY")
                 if self._poisoned: return self._refusal("SESSION_POISONED")
                 if self._awaiting_release: return self._refusal("BUSY")
@@ -216,7 +220,7 @@ def create_native_image_epoch(native_module, collector_module, canary_source, **
                         raw = None
                     except Exception: return self._refusal("INPUT_REFUSED")
                 now = self._now()
-                if self._attempts >= EPOCH_TURNS or self._epoch_deadline - now < TURN_SECONDS:
+                if self._attempts >= EPOCH_TURNS or self._epoch_deadline - now < self._turn_seconds:
                     # Only this atomic precheck proves no admission. A later
                     # NativeConversation SESSION_LIMIT is not this evidence.
                     return {"kind": "notAdmitted", "requestRef": request_ref,
@@ -226,7 +230,7 @@ def create_native_image_epoch(native_module, collector_module, canary_source, **
                 self._input_echo_wire = 0
                 self._request_ref = request_ref; self._active_turn_id = None; self._seen_refs.add(request_ref)
                 self._attempts += 1; self._running = True
-                self._admitted_deadline = now + TURN_SECONDS
+                self._admitted_deadline = now + self._turn_seconds
                 self._images = None; self._image_ready = False; self._image_failure = "none"
                 self._image_wire = self._image_ack_ordinary = 0; self._generation += 1
             try:
@@ -235,7 +239,11 @@ def create_native_image_epoch(native_module, collector_module, canary_source, **
                     if self._image_closed:
                         self._poisoned = True
                         value["answer"] = None
-                        value["metadata"].update(outcome="unknown", code="TRANSPORT_UNKNOWN", failureSite="deadline", sessionPoisoned=True)
+                        # A prior terminal failure retains its original cause.
+                        # Only a success racing revocation is changed to unknown.
+                        if value["metadata"].get("outcome") == "observed":
+                            value["metadata"].update(outcome="unknown", code="TRANSPORT_UNKNOWN", failureSite="cancelled")
+                        value["metadata"]["sessionPoisoned"] = True
                     if value["metadata"]["outcome"] == "observed" and not self._poisoned:
                         status = self._images.metadata()["outcome"] if self._images is not None else None
                         if status == "completed": self._image_ready = True

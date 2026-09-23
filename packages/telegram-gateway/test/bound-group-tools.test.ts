@@ -10,7 +10,7 @@ function fixture() {
   const stop = new AbortController(), calls: Api.AnyRequest[] = [];
   const client = { async invoke(r: Api.AnyRequest) {
     calls.push(r); assert.ok(r instanceof Api.messages.GetFullChat); assert.equal(r.chatId.toString(), "456");
-    return new Api.messages.ChatFull({ fullChat: new Api.ChatFull({ id: bigInt(456), about: "Описание группы", participants: new Api.ChatParticipants({ chatId: bigInt(456), participants: [new Api.ChatParticipant({ userId: bigInt(321), inviterId: bigInt(123), date: 1 })], version: 1 }), notifySettings: new Api.PeerNotifySettings({}) }), chats: [new Api.Chat({ id: bigInt(456), title: "Тестовая группа", photo: new Api.ChatPhotoEmpty(), participantsCount: 1, date: 1, version: 1 })], users: [new Api.User({ id: bigInt(321), firstName: "Участник", username: "member" })] });
+    return new Api.messages.ChatFull({ fullChat: new Api.ChatFull({ id: bigInt(456), about: "Описание группы", participants: new Api.ChatParticipants({ chatId: bigInt(456), participants: [new Api.ChatParticipant({ userId: bigInt(321), inviterId: bigInt(123), date: 1 })], version: 1 }), notifySettings: new Api.PeerNotifySettings({}) }), chats: [new Api.Chat({ id: bigInt(456), title: "Декаданс", photo: new Api.ChatPhotoEmpty(), participantsCount: 1, date: 1, version: 1 })], users: [new Api.User({ id: bigInt(321), firstName: "Участник", username: "member" })] });
   } };
   const reader = createBoundGroupReader({ client, binding: { accountId: "123", peerId: "-456" }, peer: new Api.InputPeerChat({ chatId: bigInt(456) }), self: new Api.User({ id: bigInt(123), self: true }), signal: stop.signal });
   const tools = createBoundGroupTools({ reader, signal: stop.signal }), dispatcher = createStandingToolDispatcher({ call: async () => ({ success: true, contentItems: [{ type: "inputText", text: "{}" }] }) }, tools.handlers);
@@ -18,7 +18,7 @@ function fixture() {
 }
 test("named dispatcher → real bound reader returns group menu and stable participant data", async () => {
   const f = fixture(); assert.deepEqual(f.tools.specs.map(s => s.name), f.tools.handlers.map(s => s.name));
-  const info = await f.dispatcher.call("neurobro_group_info", {}, f.scope); assert.equal(info.success, true); assert.equal(JSON.parse(info.contentItems[0].text).title, "Тестовая группа");
+  const info = await f.dispatcher.call("neurobro_group_info", {}, f.scope); assert.equal(info.success, true); assert.equal(JSON.parse(info.contentItems[0].text).title, "Декаданс");
   const list = await f.dispatcher.call("neurobro_list_participants", { cursor: null }, f.scope); assert.equal(list.success, true);
   const page = JSON.parse(list.contentItems[0].text); assert.equal(page.members[0].displayName, "Участник"); assert.match(page.members[0].memberRef, /^member_/); assert.equal(page.coverage.fullRoster, false); assert.equal(page.status, "exhausted");
   assert.equal(f.calls.length, 2); assert.equal(list.contentItems[0].text.includes("accessHash"), false); await f.tools.close(); await f.dispatcher.close();

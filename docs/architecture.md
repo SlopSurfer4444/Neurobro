@@ -2,40 +2,53 @@
 
 ```mermaid
 flowchart LR
-  TG[Bound Telegram group] <--> GW[Windows: TypeScript / GramJS gateway]
-  GW <--> STATE[Encrypted journals and bounded memory]
+  TG[Bound interactive Telegram group] <--> ACCOUNT[User account / MTProto]
+  SOURCE[Bound read-only community] --> ACCOUNT
+  ACCOUNT <--> GW[Windows: TypeScript / GramJS gateway]
+  GW <--> STATE[Encrypted journals, learning and task state]
   GW --> SELECT[Direct / continuation / initiative selection]
-  SELECT --> BRIDGE[Node host and Python session bridge]
-  BRIDGE --> WSL[WSL: supervised model session]
-  WSL --> CODEX[External Codex App Server]
-  CODEX --> CLOUD[Cloud model]
-  CODEX --> BRIDGE
-  BRIDGE --> OUT[Scoped tools and guarded outbox]
-  OUT --> TG
-  OUT --> STATE
-  RUST[Experimental Windows Rust isolation components]
+  SELECT <--> BRIDGE[Node host and Python session bridge]
+  BRIDGE <--> WSL[WSL: supervised sessions]
+  WSL <--> CODEX[External Codex App Server]
+  CODEX <--> CLOUD[Cloud model]
+  BRIDGE <--> TOOLS[Scoped Telegram and history tools]
+  TOOLS <--> GW
 ```
 
-## Conversation ownership
+## Telegram account and chat roles
 
-One bound Telegram account/client serves one group. Direct requests take priority. An unthreaded contribution following a recent assistant message can be assessed as a continuation; this does not prove that it addresses the assistant. Optional initiative can return an exact silence decision. Confirmed own output delays subsequent initiative.
+The gateway uses a Telegram user account through GramJS/MTProto, not a BotFather identity or Bot API polling. One account/client owns the interactive-group connection. An optional separately bound community source is read-only; peer and method checks constrain source access and outgoing actions. The account's Telegram permissions still apply.
 
-Context is assembled under budgets. Recent source messages, selected reply anchors, own-action facts and task observations have distinct provenance. A cached fact is not proof that an object is still available. Long-history tasks read and summarize incrementally, record coverage and keep explicit gaps instead of claiming to have read an entire period.
+Direct requests take priority. A contribution following an assistant message can be assessed as a continuation. Optional initiative has explicit silence decisions and own-output cooldowns. Saved learning and feedback influence context and behavior; they do not grant new tool permissions.
+
+## Context, search and memory
+
+Recent source messages, reply anchors, own-action facts, learned notes and preferences and task progress have separate provenance. Context is assembled under budgets rather than appending the entire archive to every prompt. Chat search supports query/date filters, paginated cursors and surrounding context. A source reference is not proof that media pixels or a deleted message remain retrievable.
+
+The interactive group and read-only source have distinct roles. Source observation and alerts are separately controlled; messages from the source do not become authority to send there. Profiles keep unrelated group context isolated.
+
+## Long-running history analysis
+
+History tasks persist pages, coverage, analysis nodes and operation state. Analysis can pack multiple fragments into larger model inputs and use admitted parallel workers while retaining intermediate results. Foreground conversation and background work share finite resources. Saved progress enables continuation without asking the model to reread everything on each request.
+
+Finalization is a separate stage: draft a report from saved analysis, review it, and allow a bounded correction before accepting a final artifact. The report is delivered through a multipart outbox. Lifecycle validation does not establish that every factual statement in the generated report is correct.
 
 ## Model room
 
-Our room is the host/guest supervision, private transport, scoped model sessions, bounded packets, tool dispatch and cleanup protocol. Python runs inside WSL; Node connects it to the Telegram service. The external Codex App Server calls a cloud model: model weights are not hosted by this repository.
+The project provides host/guest supervision, private transport, scoped model sessions, tool dispatch and cleanup. Python runs inside WSL; Node connects it to the Telegram service. The external Codex App Server invokes a cloud model. WSL hosts the runtime, not model weights.
 
-The published Python/Node sources include image collection, native request/response handling, session ownership, egress relay and shutdown coordination. They depend on a separately installed compatible Codex runtime and environment-specific configuration. Recorded source hashes intentionally refuse mismatched components.
+The published Python/Node sources include image collection, request/response handling, process ownership, parallel session support, egress relay and shutdown coordination. A compatible Codex runtime and environment-specific configuration are required. Version/hash contracts prevent silently mixing incompatible components.
 
-## Actions and failure handling
+## Actions and recovery
 
-An action is more than a tool declaration: admission, fresh request validation, dispatch, readback, persistence and cleanup form its lifecycle. Known failures before dispatch differ from uncertain outcomes after dispatch. Unknown delivery is retained rather than automatically retried. Profile/avatar mutations revalidate their originating request immediately before applying the change, including after upload.
+Actions pass through admission, fresh request validation, dispatch, readback, persistence and cleanup. Known pre-dispatch failures differ from uncertain outcomes after dispatch. Unknown delivery remains recorded rather than being blindly replayed. Profile/avatar requests are revalidated immediately before mutation, including after upload.
 
-## Rust components
+Recovery uses persisted progress and evidence that the previous owner has settled. Saved sibling results can survive interrupted parallel work; supported failures may obtain bounded successors. Ambiguous cases can still require explicit reconciliation. These mechanisms are not an exactly-once-delivery guarantee.
 
-The three Rust crates implement a Windows runner, native observer and native launcher/prestart hardening experiments. They use Windows APIs and share contract fixtures with the paired TypeScript package. They are separate from the current WSL model path; an `app-server` binary in that path is third-party software.
+## Original Rust components
 
-## Limits
+The three Windows Rust crates implement runner, native observation and launcher/prestart hardening experiments, with paired TypeScript contract fixtures. They are distinct from the active Python/Node-to-WSL path. Codex App Server is an external Rust dependency, not code authored in this repository.
 
-The model can still misjudge when to speak. Bounded memory is not lossless recall. Old image retrieval depends on the available reference/ancestry. Artifact references and durable poll objects have different lifetimes. Foreground and history work share finite resources. The repository is not a generalized autonomous desktop agent or a portable production appliance.
+## Deployment boundaries
+
+The source tree includes offline tests and runtime references, not a portable installation image. Telegram credentials, chat bindings, model authorization, WSL provisioning and private runtime state are configured separately. Context budgets, media availability, provider behavior and Telegram permissions bound the resulting assistant's capabilities.

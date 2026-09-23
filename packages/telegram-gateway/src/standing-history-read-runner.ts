@@ -3,11 +3,12 @@ import { types } from "node:util";
 import type { StandingIdleHistoryTicket, StandingPollWork, StandingSelection } from "./standing-conversation-adapter.js";
 import { openStandingHistoryTaskDiscovery, type StandingHistoryTaskDiscovery, type StandingHistoryTaskDiscoveryPage } from "./standing-history-task-discovery.js";
 import { openStandingHistoryTaskControlStore, type StandingHistoryTaskControlStore } from "./standing-history-task-control-store.js";
-import { openStandingHistoryTaskStore, snapshotStandingHistoryTaskIntent, type StandingHistoryTaskIntent, type StandingHistoryTaskStore } from "./standing-history-task-store.js";
+import { openStandingHistoryTaskStore, snapshotStandingHistoryTaskIntent, snapshotStandingHistoryTaskObservedSource, type StandingHistoryTaskIntent, type StandingHistoryTaskStore, type StandingHistoryTaskObservedSource } from "./standing-history-task-store.js";
 import { runStandingHistoryReadStep, type StandingHistoryReadStepResult } from "./standing-history-read-step.js";
 
 export type StandingHistoryReadWork = Readonly<{ kind: "selected"; selection: StandingSelection } | { kind: "more" } | { kind: "idle" }> |
   Readonly<{ kind: "background"; outcome:
+    Readonly<{ kind: "stalled"; taskRef: string; reason: "source-unavailable" }> |
     Readonly<{ kind: "read"; taskRef: string; result: StandingHistoryReadStepResult }> |
     Readonly<{ kind: "scan"; hasMore: boolean; coverage: StandingHistoryTaskDiscoveryPage["coverage"] }> |
     Readonly<{ kind: "skipped"; taskRef: string; reason: "cancelled" | "terminal" | "limit" | "unavailable" }> }>;
@@ -22,6 +23,7 @@ export type StandingHistoryReadRunnerInput = Readonly<{
   adapter: Readonly<{ pollWork(signal: AbortSignal, options: Readonly<{ backgroundDue: boolean }>): Promise<StandingPollWork> }>;
   directories: Readonly<{ pages: string; control: string }>; passphrase: string;
   binding: Readonly<{ accountId: string; peerId: string }>; signal: AbortSignal; foregroundPulseLimit?: number;
+  observedSource?: StandingHistoryTaskObservedSource;
 }>;
 export class StandingHistoryReadRunnerError extends Error {
   constructor(readonly code: "input" | "busy" | "closed" | "aborted" | "adapter" | "discovery" | "step" | "close") { super("STANDING_HISTORY_READ_RUNNER_" + code.toUpperCase()); }
@@ -48,7 +50,11 @@ function data(value: unknown, required: readonly string[], optional: readonly st
  * even after local close; the caller owns its normal foreground settlement.
  * Errors are explicit; a failed read step is never retried inside this pulse. */
 export async function openStandingHistoryReadRunner(value: StandingHistoryReadRunnerInput): Promise<StandingHistoryReadRunner> {
-  const args = data(value, ["adapter", "directories", "passphrase", "binding", "signal"], ["foregroundPulseLimit"]);
+  const args = data(value, ["adapter", "directories", "passphrase", "binding", "signal"], ["foregroundPulseLimit", "observedSource"]);
+  let observedSource: StandingHistoryTaskObservedSource | undefined;
+  if (Object.hasOwn(args, "observedSource")) {
+    try { observedSource = snapshotStandingHistoryTaskObservedSource(args.observedSource); } catch { return fail("input"); }
+  }
   const dirs = data(args.directories, ["pages", "control"]), bound = data(args.binding, ["accountId", "peerId"]);
   if (!args.adapter || typeof args.adapter !== "object" || types.isProxy(args.adapter)) return fail("input");
   const descriptor = Object.getOwnPropertyDescriptor(args.adapter, "pollWork");
@@ -81,6 +87,11 @@ export async function openStandingHistoryReadRunner(value: StandingHistoryReadRu
   const skipped = (taskRef: string, reason: "cancelled" | "terminal" | "limit" | "unavailable"): StandingHistoryReadWork =>
     Object.freeze({ kind: "background", outcome: Object.freeze({ kind: "skipped", taskRef, reason }) });
   async function readTask(intent: StandingHistoryTaskIntent, ticket: StandingIdleHistoryTicket): Promise<StandingHistoryReadWork> {
+    const source = intent.source;
+    if (source && (!observedSource || source.kind !== observedSource.kind || source.sourceRef !== observedSource.sourceRef ||
+        source.workspaceId !== observedSource.workspaceId || source.peerId !== observedSource.peerId)) {
+      return Object.freeze({ kind: "background", outcome: Object.freeze({ kind: "stalled", taskRef: intent.taskId, reason: "source-unavailable" }) });
+    }
     let settled!: () => void;
     const owned = { taskRef: intent.taskId, abort: new AbortController(), settled: new Promise<void>(resolveDone => { settled = resolveDone; }) };
     // Bind revocation before any task store is opened or awaited.

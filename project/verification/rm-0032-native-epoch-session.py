@@ -16,11 +16,11 @@ import uuid
 IDLE = object()
 CLOSED_CODES = frozenset({"CLOSED", "EPOCH_LIMIT", "TURN_LIMIT", "INPUT_REFUSED", "PROTOCOL_REFUSED", "IO_UNKNOWN", "NATIVE_UNKNOWN", "RELEASE_UNKNOWN", "INTERNAL_UNKNOWN"})
 DELIVERIES = frozenset({"verified", "not-sent", "unknown"})
-FRAME_BYTES = 786432
+FRAME_BYTES = 3 * 1024 * 1024
 INPUT_FRAME_BYTES = 12 * 1024 * 1024
 def incoming_frame_cap(value):
     return INPUT_FRAME_BYTES if type(value) is dict and value.get("kind") == "turn" and "images" in value else FRAME_BYTES
-EPOCH_WIRE_BYTES = 16 * (12 * 1024 * 1024 + 128 * 1024)
+EPOCH_WIRE_BYTES = 512 * 1024 * 1024
 # Native records call IDs before validating arguments/refusal budget. Each turn
 # allows 8 callbacks + 4 refusals; one final over-budget ID can poison the epoch.
 NATIVE_CALL_ID_CAP = 16 * (8 + 4) + 1
@@ -45,7 +45,7 @@ def safe_facts(value, unreleased):
     return {**value, "unreleasedTurn": unreleased is True}
 
 
-def run_session(epoch_factory, receive, emit, idle_native, validate_conversation, cancel_native, *, clock=time.monotonic, call_ref_factory=lambda: str(uuid.uuid4()), tool_names=None):
+def run_session(epoch_factory, receive, emit, idle_native, validate_conversation, cancel_native, *, clock=time.monotonic, call_ref_factory=lambda: str(uuid.uuid4()), tool_names=None, analysis_tool_scope=None):
     """epoch_factory(tool=...,clock=...)->reviewed image epoch.
 
     receive(seconds)->strict decoded dict | IDLE | None. emit(dict,seconds)->True.
@@ -209,7 +209,7 @@ def run_session(epoch_factory, receive, emit, idle_native, validate_conversation
                 if not exact(result, {"success", "contentItems"}) or type(result["success"]) is not bool or type(result["contentItems"]) is not list or len(result["contentItems"]) != 1:
                     raise SessionStop("PROTOCOL_REFUSED")
                 item = result["contentItems"][0]
-                if not exact(item, {"type", "text"}) or item["type"] != "inputText" or type(item["text"]) is not str or len(item["text"].encode("utf-8")) > 65536 or wire_size(result) > 131584:
+                if not exact(item, {"type", "text"}) or item["type"] != "inputText" or type(item["text"]) is not str or len(item["text"].encode("utf-8")) > (1088*1024 if analysis_tool_scope is not None and analysis_tool_scope() is True else 65536) or wire_size(result) > (2*1088*1024+512 if analysis_tool_scope is not None and analysis_tool_scope() is True else 131584):
                     raise SessionStop("PROTOCOL_REFUSED")
                 waiting_call = None
                 set_phase("turn")
@@ -344,19 +344,27 @@ ANALYSIS_NAMES = ("neurobro_analysis_material", "neurobro_analysis_notes", "neur
 
 
 def run_scoped_session(epoch_factory, receive, emit, idle_registry, validate_input, cancel_native,
-                       *, budget, clock=time.monotonic, tool_names):
+                       *, budget, clock=time.monotonic, tool_names, protocol="standing-scoped-epoch-v1"):
     """Opt-in scoped wire over the unchanged single-pump legacy driver.
 
-    Factories create two independent engines sharing budget.slot(purpose).
+    Factories create two engines (three only with explicit v2), sharing one
+    budget.slot(purpose) coordinator and the unchanged aggregate limits.
     Threads are lazy; no second process/reader/auth lifecycle is introduced.
     The compatibility actor below is internal only. Its aggregate legacy-shaped
     state is NEVER emitted: the scoped final has its own schema and dispatch
     counters. Production registration/normalizers must explicitly opt in.
     """
-    if (type(tool_names) is not dict or set(tool_names) != set(SCOPED_PURPOSES)
+    if type(protocol) is not str or protocol not in ("standing-scoped-epoch-v1", "standing-scoped-epoch-v2"):
+        raise ValueError("scoped-session-config-refused")
+    scope_purposes = SCOPED_PURPOSES + (("community-assessment",) if protocol == "standing-scoped-epoch-v2" else ())
+    if (getattr(budget, "protocol", "standing-scoped-epoch-v1") != protocol
+            or getattr(idle_registry, "protocol", "standing-scoped-epoch-v1") != protocol):
+        raise ValueError("scoped-session-config-refused")
+    if (type(tool_names) is not dict or set(tool_names) != set(scope_purposes)
             or type(tool_names["conversation"]) is not tuple or not tool_names["conversation"]
             or tool_names["conversation"][0] != "neurobro_read_history"
-            or tool_names["history-analysis"] != ANALYSIS_NAMES):
+            or tool_names["history-analysis"] != ANALYSIS_NAMES
+            or protocol == "standing-scoped-epoch-v2" and (type(tool_names["community-assessment"]) is not tuple or tool_names["community-assessment"] != ())):
         raise ValueError("scoped-session-config-refused")
     names = tool_names["conversation"] + tool_names["history-analysis"]
     if len(names) > 32 or len(set(names)) != len(names) or any(type(n) is not str or re.fullmatch(r"neurobro_[a-z][a-z0-9_]{0,54}", n) is None for n in names):
@@ -375,7 +383,7 @@ def run_scoped_session(epoch_factory, receive, emit, idle_registry, validate_inp
             self.actors = {}; self.active_purpose = self.active_ref = None
             self.full_scope = None; self._closed = False
             try:
-                for purpose in SCOPED_PURPOSES:
+                for purpose in scope_purposes:
                     def callback(params, seconds, purpose=purpose):
                         if self.active_purpose != purpose or type(params) is not dict or params.get("tool") not in tool_names[purpose]:
                             raise SessionStop("PROTOCOL_REFUSED")
@@ -419,7 +427,7 @@ def run_scoped_session(epoch_factory, receive, emit, idle_registry, validate_inp
                 count = budget.finish_not_admitted(purpose, request_ref)
                 self.active_purpose = self.active_ref = None
                 return {**value, "turnsAdmitted": count}
-            if purpose == "history-analysis" and value.get("imageMetadata", {}).get("exportReady") is not False:
+            if purpose != "conversation" and value.get("imageMetadata", {}).get("exportReady") is not False:
                 raise SessionStop("NATIVE_UNKNOWN")
             return value
 
@@ -434,7 +442,7 @@ def run_scoped_session(epoch_factory, receive, emit, idle_registry, validate_inp
 
         def releaseTurn(self, request_ref, delivery):
             if request_ref != self.active_ref or self.active_purpose is None: raise SessionStop("PROTOCOL_REFUSED")
-            if self.active_purpose == "history-analysis" and delivery != "not-sent": raise SessionStop("PROTOCOL_REFUSED")
+            if self.active_purpose != "conversation" and delivery != "not-sent": raise SessionStop("PROTOCOL_REFUSED")
             self.actors[self.active_purpose].releaseTurn(request_ref, delivery)
             budget.release_turn(self.active_purpose, request_ref, delivery)
             self.active_purpose = self.active_ref = None
@@ -447,13 +455,13 @@ def run_scoped_session(epoch_factory, receive, emit, idle_registry, validate_inp
         def final_facts(self, legacy):
             counters = budget.scoped_counters()
             slots = []
-            for purpose in SCOPED_PURPOSES:
+            for purpose in scope_purposes:
                 state = safe_facts(self.actors[purpose].state(), False)
                 slots.append({"purpose": purpose, **{k: state[k] for k in ("threadStarted", "turnsAdmitted", "turnsAttempted", "toolCalls", "closed", "poisoned")}})
             if (sum(v["turnsAdmitted"] for v in slots) > counters["turnsAdmitted"] or
                     sum(int(v["threadStarted"]) for v in slots) > counters["threadStartDispatches"]):
                 raise SessionStop("INTERNAL_UNKNOWN")
-            return {**legacy, "schema": "neurobro-native-scoped-epoch-v1", "threadLimit": 2,
+            return {**legacy, "schema": "neurobro-native-scoped-epoch-v2" if protocol == "standing-scoped-epoch-v2" else "neurobro-native-scoped-epoch-v1", "threadLimit": len(scope_purposes),
                     "turnsAdmitted": counters["turnsAdmitted"],
                     "threadStartDispatches": counters["threadStartDispatches"], "turnStartDispatches": counters["turnStartDispatches"], "slots": slots}
 
@@ -468,7 +476,7 @@ def run_scoped_session(epoch_factory, receive, emit, idle_registry, validate_inp
         if type(value) is not dict: raise SessionStop("PROTOCOL_REFUSED")
         kind = value.get("kind")
         if kind == "turn":
-            if (not (exact(value, {"kind", "purpose", "requestRef", "input"}) or exact(value, {"kind", "purpose", "requestRef", "input", "images"})) or value["purpose"] not in SCOPED_PURPOSES
+            if (not (exact(value, {"kind", "purpose", "requestRef", "input"}) or exact(value, {"kind", "purpose", "requestRef", "input", "images"})) or value["purpose"] not in scope_purposes
                     or not identifier(value["requestRef"]) or value["requestRef"] in purposes or len(purposes) >= 17): raise SessionStop("PROTOCOL_REFUSED")
             if "images" in value and value["purpose"] != "conversation": raise SessionStop("INPUT_REFUSED")
             text = value["input"]
@@ -488,7 +496,7 @@ def run_scoped_session(epoch_factory, receive, emit, idle_registry, validate_inp
         nonlocal final_written
         actor = holder["actor"]; kind = frame["kind"]
         if kind == "ready":
-            value = {"kind": "ready", "protocol": "standing-scoped-epoch-v1", "scopes": [{"purpose": p, "tools": list(tool_names[p])} for p in SCOPED_PURPOSES]}
+            value = {"kind": "ready", "protocol": protocol, "scopes": [{"purpose": p, "tools": list(tool_names[p])} for p in scope_purposes]}
         elif kind in ("scope", "completed"):
             if actor.full_scope is None or frame["scope"]["requestRef"] != actor.full_scope["requestRef"]: raise SessionStop("PROTOCOL_REFUSED")
             value = {**frame, "scope": dict(actor.full_scope)}
@@ -512,5 +520,6 @@ def run_scoped_session(epoch_factory, receive, emit, idle_registry, validate_inp
         return idle_registry.poll(budget.rpc, min(seconds, budget.remaining(seconds)))
 
     result = run_session(factory, scoped_receive, scoped_emit, poll_idle,
-                         lambda text: True, cancel_native, clock=clock, tool_names=names)
+                         lambda text: True, cancel_native, clock=clock, tool_names=names,
+                         analysis_tool_scope=lambda: holder["actor"].active_purpose == "history-analysis")
     return {**result, "facts": holder["actor"].final_facts(result["facts"])}

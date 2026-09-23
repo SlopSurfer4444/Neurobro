@@ -54,7 +54,7 @@ async function fixture(t: TestContext) {
   const counts = { opens: 0, sends: 0, reads: 0, closes: 0, ownerProofs: 0 };
   const deliver = (mode: "verified" | "unknown" = "verified", body?: string) => {
     let sent: PilotSend;
-    return runStandingHistoryTaskDelivery({ ...binding, directories, signal, readiness, ...(body === undefined ? {} : { body }),
+    return runStandingHistoryTaskDelivery({ ...binding, directories, signal, readiness, finalReport: { schema: "standing-history-final-report-v1", taskRef: intent.taskId, sourceHead: readiness.sourceHead, analysisHead: readiness.expectedHead, body: body ?? "Synthetic user-facing report" },
       async verifyOwnerReady(nativeBinding) { counts.ownerProofs++; return { schema: "standing-analysis-owner-ready-v1", nativeBinding, basis: "persisted-owner-settlement", modelOutcome: "not-proven" }; },
       ticket: { openTaskReply() { counts.opens++; return { async close() { counts.closes++; }, transport: {
         async sendOnce(reply) { counts.sends++; sent = reply; if (mode === "unknown") throw Error("synthetic unknown send"); return { messageId: 2001 }; },

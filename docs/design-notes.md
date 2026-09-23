@@ -1,27 +1,29 @@
-# Design notes
+# Design decisions
 
-## Problem
+## Account-based integration
 
-A group assistant that technically returns text can still feel unusable: it loses its own previous answer, misses short continuations, interrupts unrelated conversations or leaves users waiting after a failed image generation.
+Neurobro participates through an authenticated Telegram user account. GramJS/MTProto supplies the transport; exact peer bindings and scoped tools supply application boundaries. This separates the identity in Telegram from the model and its tools. No BotFather bot is needed for this gateway.
 
-## Approach
+## Conversation as a continuous workflow
 
-The project was developed through a working Telegram integration and owner-led group testing. AI coding agents assisted implementation and independent source review. Fixes targeted lifecycle and context classes rather than hardcoding individual chat messages.
+The next model turn receives relevant recent conversation, reply anchors, prior assistant actions, learning and task observations. Direct calls, conversational continuations and optional initiative have different selection paths. Silence is an explicit valid outcome.
 
-| Observed problem | Engineering response |
-| --- | --- |
-| Short answer to the assistant's invitation was missed | Separate continuation assessment with the preceding own message in bounded context |
-| Unwelcome repeated initiative | Own-output cooldown, direct-request priority and explicit silence |
-| Deleted/edited queued message stopped unrelated work | Local stale-selection handling before model admission |
-| Image generation failed and blocked conversation | Confirmed generation failure becomes an honest text outcome; uncertain lifecycle remains unknown |
-| Upload refusal was indistinguishable from an uncertain send | Typed pre-dispatch failure, joined settlement and a durable terminal record |
-| Avatar request changed during upload | Final request revalidation before the mutation |
-| Later requests lacked evidence of prior actions/history work | Persisted bounded action/task facts, with explicit source and coverage limits |
+## Bounded context, durable work
 
-## Evidence
+Memory and task storage are separate from the prompt. Search and history tools retrieve relevant material, and long-period analysis records coverage and saved intermediate results. Larger packets and retained workspaces reduce repeated overhead; parallel analysis remains subject to lifecycle and resource admission.
 
-The private development version completed 1,466 gateway checks plus native Python/Linux, host and Windows-launcher checks. It was deployed and used in a real group. That historical evidence does not establish every feature as live-accepted or prove the public extraction unchanged. Public-copy verification is recorded separately in [testing](testing.md).
+## Reports as artifacts
 
-## Tradeoffs and unfinished work
+An internal analysis summary is not automatically the user-facing report. Finalization drafts and reviews a distinct report using saved materials. Delivery handles Telegram-sized parts, readback and uncertain outcomes independently of the report's content.
 
-Conservative unknown-outcome handling reduces blind duplication but can require operator reconciliation. Bounded context controls input growth but cannot guarantee perfect recall. Social initiative needs live evaluation beyond deterministic tests. The environment-specific runtime has stronger version binding than installation portability. These are constraints of the current design, not hidden completed features.
+## Recovery before repetition
+
+The system distinguishes confirmed failure, saved progress and uncertain external effects. A later worker reconciles ownership and preserved results before continuing. An unknown send is not silently turned into a fresh send; a finished analysis need not be repeated merely because delivery failed.
+
+## AI-assisted engineering
+
+AI coding agents were used for implementation, tests and review. The project author owned requirements, architecture choices, integration priorities and acceptance in real group use. Independent review and deterministic checks serve different purposes: agreement between reviewers is not a substitute for exercising a scenario.
+
+## Evidence and scope
+
+Offline checks use synthetic messages, fake transports and temporary state. Live development also exercised the assistant in Telegram groups. The public-copy checks are recorded in [testing](testing.md), separately from historical deployment evidence. Group records and credentials are not part of this repository.

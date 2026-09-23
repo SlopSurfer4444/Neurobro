@@ -2,11 +2,15 @@ import { types } from "node:util";
 import type { PilotPrimary } from "./pilot-telegram-adapter.js";
 import type { StandingHistoryTaskContextEvent } from "./standing-history-task-manager.js";
 import type { StandingHistoryTaskIntent } from "./standing-history-task-store.js";
+import { snapshotStandingHistoryTaskProgressEvent, type StandingHistoryTaskProgressEvent } from "./standing-history-task-progress.js";
 import { createStandingHistoryTaskContextProjection, type StandingHistoryTaskContextProjectionInput,
   type StandingHistoryTaskContextObservation, type StandingHistoryTaskContextPage } from "./standing-history-task-context.js";
 
 export type StandingHistoryTaskMemory = Readonly<{
   observe(event: StandingHistoryTaskContextEvent, observedAt: number): void;
+  /** Passive host outcome for an already authenticated task. Missing/evicted
+   * tasks are ignored; this never creates task identity or execution authority. */
+  observeProgress(event: StandingHistoryTaskProgressEvent, observedAt: number): void;
   /** Discovery supplies purpose only. Rediscovering the exact immutable intent
    * preserves an existing status snapshot and its original observation time. */
   remember(intent: StandingHistoryTaskIntent, observedAt: number): void;
@@ -65,13 +69,25 @@ export function createStandingHistoryTaskMemory(input: StandingHistoryTaskContex
         }
         const v = record(event, ["kind", "intent", "status"]);
         if (v.kind !== "snapshot") return fail();
-        const observation = projection.capture({ intent: v.intent as Extract<StandingHistoryTaskContextEvent, {kind:"snapshot"}>["intent"],
-          status: v.status as Extract<StandingHistoryTaskContextEvent, {kind:"snapshot"}>["status"], observedAt });
+        const intent = v.intent as Extract<StandingHistoryTaskContextEvent, {kind:"snapshot"}>["intent"];
+        // Projection validates the intent before consulting this private handle.
+        const taskDescriptor = intent && typeof intent === "object" && !types.isProxy(intent) ? Object.getOwnPropertyDescriptor(intent, "taskId") : undefined;
+        const prior = taskDescriptor && "value" in taskDescriptor ? entries.get(taskDescriptor.value) : undefined;
+        const observation = projection.capture({ intent,
+          status: v.status as Extract<StandingHistoryTaskContextEvent, {kind:"snapshot"}>["status"], observedAt, ...(prior ? { previous: prior } : {}) });
         const previous = entries.get(observation.taskRef);
         if (previous && (previous.requesterId !== observation.requesterId || previous.intentRef !== observation.intentRef)) return fail();
         entries.delete(observation.taskRef); entries.set(observation.taskRef, observation);
         if (entries.size > 32) entries.delete(entries.keys().next().value!);
       } catch { try { invalidate(); } catch { entries.clear(); } throw new Error("STANDING_HISTORY_TASK_MEMORY_REFUSED"); }
+    },
+    observeProgress(event: StandingHistoryTaskProgressEvent, observedAt: number): void {
+      if (closed) return;
+      live();
+      const e = snapshotStandingHistoryTaskProgressEvent(event), previous = entries.get(e.taskRef);
+      if (!previous) return;
+      const observation = projection.progress(previous, e, observedAt);
+      entries.delete(e.taskRef); entries.set(e.taskRef, observation);
     },
     remember(intent: StandingHistoryTaskIntent, observedAt: number): void {
       if (closed) return;

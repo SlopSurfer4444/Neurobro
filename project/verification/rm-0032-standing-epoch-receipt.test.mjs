@@ -24,6 +24,9 @@ test('native failure diagnostics preserve bounded evidence without changing succ
   for(const patch of [{code:'private text'},{imageFailure:'data:image/png;base64,SECRET'},{eventBytes:262146},{eventCount:true},{url:'secret'}]){
     const bad=clone(value);Object.assign(bad.diagnostics.nativeFailure,patch);assert.throws(()=>normalizeEpochResult(bad));
   }
+  const analysis=clone(value);analysis.diagnostics.nativeFailure={...failure,purpose:'history-analysis',eventBytes:2097153};
+  assert.equal(normalizeEpochResult(analysis).diagnostics.nativeFailure.eventBytes,2097153);
+  analysis.diagnostics.nativeFailure.eventBytes=2097154;assert.throws(()=>normalizeEpochResult(analysis));
   const observed=clone(byMode.ok.result);observed.diagnostics.nativeFailure=failure;assert.throws(()=>normalizeEpochResult(observed));
 });
 

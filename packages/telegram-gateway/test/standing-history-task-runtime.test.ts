@@ -24,7 +24,7 @@ test("public disposition is a fixed reason only and requires ready chains for a 
   const call = async (requestRef: string) => runtime.handlers[1]!.call({ taskRef }, { requestRef, callRef: "status", signal }) as Promise<{ success: boolean; contentItems: { text: string }[] }>;
   try {
     runtime.begin({ requestRef: "reasons", primary });
-    for (const reason of ["coverage", "stale", "consumed-without-prepared", "source-page-quota", "overflow"]) {
+    for (const reason of ["coverage", "stale", "consumed-without-prepared", "source-page-quota", "report-required", "overflow"]) {
       disposition = { storage: "ready", reason }; const result = await call("reasons");
       assert.equal(result.success, true); assert.deepEqual(JSON.parse(result.contentItems[0]!.text).disposition, disposition);
     }
@@ -60,6 +60,8 @@ test("public delivery projection preserves explicit evidence and rejects inconsi
     }
     await runtime.finish(); runtime.begin({ requestRef: "parts", primary });
     for (const valid of [
+      { state: "partial", consumed: true, partsTotal: 16, verifiedParts: 15, nextPart: 16 },
+      { state: "verified", consumed: true, partsTotal: 5, verifiedParts: 5 },
       { state: "partial", consumed: true, partsTotal: 2, verifiedParts: 0, nextPart: 1 },
       { state: "partial", consumed: true, partsTotal: 2, verifiedParts: 1, nextPart: 2 },
       { state: "verified", consumed: true, partsTotal: 2, verifiedParts: 2 },
@@ -72,6 +74,9 @@ test("public delivery projection preserves explicit evidence and rejects inconsi
     }
     await runtime.finish(); runtime.begin({ requestRef: "bad-parts", primary });
     for (const bad of [
+      { state: "partial", consumed: true, partsTotal: 17, verifiedParts: 0, nextPart: 1 },
+      { state: "verified", consumed: true, partsTotal: 5, verifiedParts: 2 },
+      { state: "partial", consumed: true, partsTotal: 5, verifiedParts: 3, nextPart: 5 },
       { state: "partial", consumed: true, partsTotal: 2, verifiedParts: 1 },
       { state: "partial", consumed: true, partsTotal: 2, verifiedParts: 1, nextPart: 1 },
       { state: "verified", consumed: true, partsTotal: 2, verifiedParts: 1 },

@@ -34,6 +34,29 @@ def epoch(rpc=None, tool=None, clock=None):
 
 
 class EpochTests(unittest.TestCase):
+    def test_owner_close_before_budget_is_cancelled_not_deadline(self):
+        now=[100.0];rpc=f.Rpc();actor=epoch(rpc,clock=lambda:now[0])
+        original=rpc.next_frame
+        def close_during_wait(seconds):
+            now[0]=163.6;actor.close();return original(seconds)
+        rpc.next_frame=close_during_wait
+        value=actor.turn('close-before-deadline','Synthetic')
+        self.assertEqual(value['metadata']['outcome'],'unknown')
+        self.assertEqual(value['metadata']['failureSite'],'cancelled')
+        self.assertEqual(value['metadata']['code'],'TRANSPORT_UNKNOWN')
+        self.assertTrue(value['metadata']['sessionPoisoned'])
+
+    def test_close_does_not_overwrite_prior_native_failure(self):
+        rpc=f.Rpc();actor=epoch(rpc)
+        def fail_then_close(seconds):
+            try:raise f.m.Refused('PROTOCOL_REFUSED','events')
+            finally:actor.close()
+        rpc.next_frame=fail_then_close
+        value=actor.turn('original-failure','Synthetic')
+        self.assertEqual(value['metadata']['code'],'PROTOCOL_REFUSED')
+        self.assertEqual(value['metadata']['failureSite'],'events')
+        self.assertEqual(value['metadata']['outcome'],'unknown')
+
     def test_terminal_generation_failure_is_truthful_releasable_text_without_replay(self):
         for failure, original in ((failure, original) for failure in (None, {"type":"usageLimitExceeded", "limitId":"private-limit"})
                 for original in ("Готово! Аватар изменён.", "я" * 1800)):
@@ -379,5 +402,31 @@ class EpochTests(unittest.TestCase):
         self.assertTrue(actor.state()["closed"])
         with self.assertRaises(e.EpochError):list(actor.image_frames())
 
+
+
+class CommunityImageRefusalTests(unittest.TestCase):
+    def actor(self, rpc):
+        return e.create_native_image_epoch(f.m,c,f.SOURCE,profile=f.PROFILE,cwd=f.CWD,tool_spec=copy.deepcopy(f.SPEC),
+            instructions='Assess supplied text.',rpc=rpc,tool=lambda *_:self.fail('No community callback'),
+            isolation_mode='community-assessment',thread_config={'web_search':'disabled','features.image_generation':False})
+    def test_valid_image_input_refused_before_admission(self):
+        rpc=f.Rpc();actor=self.actor(rpc)
+        value=actor.turn('one','Assess',[{'mimeType':'image/png','base64':base64.b64encode(PNG).decode()}])
+        self.assertEqual(value['metadata']['code'],'INPUT_REFUSED');self.assertEqual(rpc.calls,[])
+        self.assertEqual(actor.state()['turnsAdmitted'],0)
+    def test_valid_image_lifecycle_rejected_for_notification_and_turn_ack(self):
+        for acknowledgement in (False,True):
+            rpc=f.Rpc(images);actor=self.actor(rpc)
+            if acknowledgement:
+                original=rpc.exchange
+                def exchange(method,params,seconds):
+                    result,error=original(method,params,seconds)
+                    if method=='turn/start':result['turn']['items']=[image(result['turn']['id'])]
+                    return result,error
+                rpc.exchange=exchange
+            value=actor.turn('one','Assess')
+            self.assertEqual(value['metadata']['code'],'TOOL_REFUSED',value)
+            self.assertTrue(actor.state()['poisoned']);self.assertFalse(value['imageMetadata']['exportReady'])
+            with self.assertRaises(e.EpochError):list(actor.image_frames())
 
 if __name__ == "__main__":unittest.main()

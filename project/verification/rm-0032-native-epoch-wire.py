@@ -19,9 +19,9 @@ import sys
 import threading
 import time
 
-FRAME_BYTES = 786432  # excludes LF, matching standing-epoch-wire.ts
+FRAME_BYTES = 3 * 1024 * 1024  # excludes LF, matching standing-epoch-wire.ts
 INPUT_FRAME_BYTES = 12 * 1024 * 1024
-TOTAL_BYTES = 16 * (12 * 1024 * 1024 + 128 * 1024)
+TOTAL_BYTES = 512 * 1024 * 1024
 SAFE_INTEGER = 2**53 - 1
 CODES = frozenset({"config", "closed", "frame", "bounds", "read", "write", "partial-eof", "concurrent-read", "concurrent-write", "timeout-value", "write-timeout"})
 
@@ -64,27 +64,31 @@ def _canonical(value, depth=0):
         return {key: _canonical(value[key], depth+1) for key in keys}
     raise ValueError()
 
-def encode_frame(value, *, incoming=False):
+def encode_frame(value, *, incoming=False, parallel=False):
     try:
-        if type(value) is not dict: raise ValueError()
+        if type(value) is not dict or type(parallel) is not bool: raise ValueError()
         text = json.dumps(_canonical(value), ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-        cap = INPUT_FRAME_BYTES if incoming and value.get("kind") == "turn" and "images" in value else FRAME_BYTES
+        visual = incoming and value.get("kind") == "turn" and "images" in value
+        if incoming and parallel and set(value)=={'workerId','frame'} and type(value.get('workerId')) is str and type(value.get('frame')) is dict:
+            inner=value['frame']
+            visual=inner.get('kind')=='turn' and inner.get('purpose')=='conversation' and 'images' in inner
+        cap = INPUT_FRAME_BYTES if visual else FRAME_BYTES
         if not 1 <= len(text) <= cap: raise EpochWireError("bounds")
         return text + b"\n"
     except EpochWireError: raise
     except Exception: raise EpochWireError("frame") from None
 
-def decode_frame(line):
+def decode_frame(line, *, parallel=False):
     try:
         if type(line) is not bytes or not 2 <= len(line) <= INPUT_FRAME_BYTES+1 or not line.endswith(b"\n"): raise ValueError()
         value = json.loads(line[:-1].decode("utf-8", "strict"), object_pairs_hook=_pairs,
                            parse_float=_non_integer, parse_constant=_non_integer)
-        if encode_frame(value, incoming=True) != line: raise ValueError()
+        if encode_frame(value, incoming=True, parallel=parallel) != line: raise ValueError()
         return value
     except Exception: raise EpochWireError("frame") from None
 
 class NativeEpochWire:
-    def __init__(self, read_fd, write_fd, *, idle):
+    def __init__(self, read_fd, write_fd, *, idle, parallel=False):
         self._state = threading.Lock()
         self._reader, self._writer = threading.Lock(), threading.Lock()
         self._closed = False
@@ -96,8 +100,9 @@ class NativeEpochWire:
         self._read_frames = self._write_frames = 0
         self._write_active = False
         self._idle = idle
+        self._parallel = parallel
         try:
-            if sys.platform != "linux" or type(read_fd) is not int or type(write_fd) is not int or read_fd < 0 or write_fd < 0 or read_fd == write_fd or idle is None: raise ValueError()
+            if sys.platform != "linux" or type(parallel) is not bool or type(read_fd) is not int or type(write_fd) is not int or read_fd < 0 or write_fd < 0 or read_fd == write_fd or idle is None: raise ValueError()
             if any(not stat.S_ISFIFO(os.fstat(fd).st_mode) for fd in (read_fd, write_fd)): raise ValueError()
             # Access modes must agree, not merely descriptor object types.
             import fcntl
@@ -151,7 +156,7 @@ class NativeEpochWire:
                     if time.monotonic() >= deadline: return self._idle
                     if newline >= 0:
                         line = bytes(self._buffer[:newline+1])
-                        try: value = decode_frame(line)
+                        try: value = decode_frame(line,parallel=self._parallel)
                         except EpochWireError: self._fail("frame")
                         with self._state:
                             self._check_locked()

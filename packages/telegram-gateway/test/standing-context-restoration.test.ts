@@ -8,6 +8,7 @@ import { openStandingDialogueJournal, type JournalDialogue, type StandingDialogu
 import { readStandingContextRestoration, requireStandingContextRestoration } from "../src/standing-context-restoration.js";
 import { conversationModelInput, CONVERSATION_INPUT_BYTES } from "../src/standing-model-input.js";
 import type { StandingContext, StandingContextMessage } from "../src/standing-context.js";
+import { readStandingSharedContext } from "../src/standing-shared-context-reader.js";
 
 const binding = { peerId: "-100123", accountId: "789" };
 const primary = { chatId: binding.peerId, ownerId: "456", messageId: 200, text: "ПРОМПТ что ты говорил?" };
@@ -34,6 +35,49 @@ function context(text = primary.text, chain: StandingContextMessage[] = []): Sta
   return { version: "standing-context-v1", primary: message(primary.messageId, text), replyChain: chain,
     recent: [], chainStatus: "complete", recentStatus: "complete" };
 }
+
+test("long direct text and forwarded caption remain complete through encrypted reopen, restoration, shared recall and producer packet", async () => {
+  const directory = join(await mkdtemp(join(tmpdir(), "neurobro-long-direct-test-")), "journal");
+  const args = { directory, passphrase: "invented fulltext restoration passphrase", binding };
+  const priorText = "я".repeat(2600) + " ХВОСТ ПРЕДЫДУЩЕГО ВОПРОСА";
+  const caption = "Комментарий клиента ".repeat(180) + " ХВОСТ ПЕРЕСЛАННОЙ ПОДПИСИ";
+  const selected = { ...primary, text: "ПРОМПТ " + "уточнение ".repeat(470) + " ХВОСТ НОВОГО ВОПРОСА" };
+  const prior = message(100, priorText), forwarded = { ...message(190, caption), replyToMessageId: 100,
+    forwarded: { originalDate: 1699999000, sourceName: "Клиент" } };
+  const current: StandingContext = { version: "standing-context-v1", primary: { ...message(200, selected.text), replyToMessageId: 190 },
+    replyChain: [forwarded, prior], recent: [], chainStatus: "complete", recentStatus: "complete" };
+  assert.ok(Buffer.byteLength(selected.text) > 4096 && Buffer.byteLength(caption) > 4096);
+  const writer = await openStandingDialogueJournal(args);
+  const previousClaim = await writer.recordQuestion({ primary: { ...selected, messageId: 100, text: priorText },
+    source: { date: prior.date, displayName: prior.displayName } });
+  await writer.recordOutcome({ key: previousClaim.key, kind: "model", delivery: "verified", answer: "Короткий проверенный ответ" });
+  const currentClaim = await writer.recordQuestion({ primary: selected, context: current });
+  await assert.rejects(writer.recordOutcome({ key: currentClaim.key, kind: "model", delivery: "verified", answer: "я".repeat(2049) }));
+  writer.close();
+  const reader = await openStandingDialogueJournal({ ...args, readOnly: true }), references = createConversationReferences(binding);
+  const signal = new AbortController().signal;
+  try {
+    const stored = await reader.read({ limit: 10 });
+    const question = stored.dialogues.find(row => row.key === currentClaim.key)!.question;
+    assert.equal(question.primary.text, selected.text); assert.equal(question.context!.replyChain[0]!.text, caption);
+    const restored = await readStandingContextRestoration({ journal: reader, binding, primary: selected, references, signal });
+    assert.equal(restored.dialogues[0]!.question.text, priorText);
+    const shared = readStandingSharedContext({ binding, primary: selected, references, signal, scopeRef: "scope_" + "a".repeat(32),
+      asOf: Math.floor(Date.now() / 1000), context: question.context!, restoration: restored });
+    assert.ok(Buffer.byteLength(JSON.stringify(shared.snapshot)) <= 8192);
+    for (const item of shared.snapshot.items) {
+      if (item.evidence.kind === "observed-message") assert.equal(item.evidence.text, caption);
+      if (item.evidence.kind === "verified-dialogue") assert.equal(item.evidence.question.text, priorText);
+    }
+    const encoded = conversationModelInput(selected, question.context, references, restored, undefined, shared);
+    const packet = JSON.parse(encoded);
+    assert.equal(packet.currentRequest.text, selected.text.slice("ПРОМПТ ".length));
+    assert.equal(packet.currentRequest.shortened, false); assert.ok(Buffer.byteLength(encoded) <= CONVERSATION_INPUT_BYTES);
+    assert.equal(packet.replyChain[0].forwarded.interpretation, "quoted-source-not-request");
+    assert.equal(packet.replyChain[0].text, caption); assert.equal(packet.replyChain[0].shortened, false);
+    assert.equal((await reader.read({ limit: 10 })).dialogues.find(row => row.key === currentClaim.key)!.question.context!.replyChain[0]!.text, caption);
+  } finally { reader.close(); references.close(); }
+});
 
 test("real encrypted journal reopens and restores only verified model pairs without plaintext persistence", async () => {
   const directory = join(await mkdtemp(join(tmpdir(), "neurobro-restoration-test-")), "journal");

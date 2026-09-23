@@ -144,7 +144,7 @@ test("page/source/coverage mismatches and foreign own aliases are rejected while
   for (const mutate of [(v: any) => { v.nextCheckpoint.offsetId = 99; }, (v: any) => { v.sources[0].messageRef = "m_" + "f".repeat(24); },
     (v: any) => { v.page.coverage.traversalComplete = true; }, (v: any) => { v.page.excluded.nonText = 1; }, (v: any) => { v.nextCheckpoint.upperBoundMessageId = 101; },
     (v: any) => { v.page.messages[0].authorRef = "neurobro"; }, (v: any) => { v.page.messages[0].author = "self"; },
-    (v: any) => { v.page.cursor = "old-native-cursor"; }, (v: any) => { v.page.messages[0].text = "x".repeat(4097); }, (v: any) => { v.sources.push(v.sources[0]); }]) {
+    (v: any) => { v.page.cursor = "old-native-cursor"; }, (v: any) => { v.page.messages[0].text = "x".repeat(16385); }, (v: any) => { v.sources.push(v.sources[0]); }]) {
     const changed = structuredClone(valid); mutate(changed); assert.throws(() => snapshotStandingHistoryTaskPage(changed));
   }
   await store.close();

@@ -7,6 +7,7 @@ import { assertPilotPrivateDirectory } from "./pilot-outbox.js";
 import { decryptSession, encryptSession } from "./session-crypto.js";
 import { snapshotStandingHistoryTaskIntent, type StandingHistoryTaskIntent, type StandingHistoryStoredPage } from "./standing-history-task-store.js";
 import { projectStandingHistorySource, type StandingHistorySourceFragment } from "./standing-history-source-projection.js";
+import { MATERIAL_BYTES, MAX_FRAGMENTS, MAX_ANALYSIS_NODES, MAX_SUPPORTS, SUMMARY_BYTES, MAX_CLAIMS, NODE_PLAIN_BYTES, NODE_CIPHER_BYTES } from "./standing-history-analysis-limits.js";
 
 export type StandingHistoryAnalysisSupport = Readonly<{ sourceRef: string; versionRef: string }>;
 export type StandingHistoryAnalysisOutput = Readonly<{ summary: string; claims: readonly Readonly<{
@@ -38,7 +39,7 @@ export class StandingHistoryAnalysisStoreError extends Error {
   }
 }
 const fail = (code: StandingHistoryAnalysisStoreError["code"]): never => { throw new StandingHistoryAnalysisStoreError(code); };
-const DOMAIN = "DecadansNeurobro/standing-history-analysis/v1", MAX_NODES = 1024, MAX_NODE = 128 * 1024, MAX_CIPHER = 192 * 1024;
+const DOMAIN = "DecadansNeurobro/standing-history-analysis/v1", MAX_NODES = MAX_ANALYSIS_NODES, MAX_NODE = NODE_PLAIN_BYTES, MAX_CIPHER = NODE_CIPHER_BYTES;
 const refValid = (v: unknown, prefix: string): v is string => typeof v === "string" && new RegExp("^" + prefix + "_[0-9a-f]{48}$", "u").test(v);
 const digestValid = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v);
 const textValid = (v: unknown, maximum: number): v is string => typeof v === "string" && v.trim().length > 0 && !v.includes("\0") && Buffer.byteLength(v) <= maximum && Buffer.from(v).toString("utf8") === v;
@@ -68,8 +69,8 @@ function array(value: unknown, maximum: number, minimum = 0): unknown[] {
 const supportKey = (s: StandingHistoryAnalysisSupport) => s.sourceRef + ":" + s.versionRef;
 export function snapshotStandingHistoryAnalysisOutput(value: unknown): StandingHistoryAnalysisOutput {
   const v = data(value, ["summary", "claims"], ["omittedDetailCount"]);
-  if (!textValid(v.summary, 4096) || Object.hasOwn(v, "omittedDetailCount") && (!Number.isSafeInteger(v.omittedDetailCount) || Number(v.omittedDetailCount) < 0)) return fail("input");
-  const claims = array(v.claims, 16).map(value => {
+  if (!textValid(v.summary, SUMMARY_BYTES) || Object.hasOwn(v, "omittedDetailCount") && (!Number.isSafeInteger(v.omittedDetailCount) || Number(v.omittedDetailCount) < 0)) return fail("input");
+  const claims = array(v.claims, MAX_CLAIMS).map(value => {
     const c = data(value, ["kind", "text", "supports"]);
     if (!["reported", "decision", "open-question", "inference"].includes(c.kind as string) || !textValid(c.text, 1024)) return fail("input");
     const supports = array(c.supports, 16, 1).map(value => {
@@ -85,11 +86,11 @@ export function snapshotStandingHistoryAnalysisOutput(value: unknown): StandingH
  * attempt. The host owns this list; it must never come from model arguments.
  * Store membership alone includes notes omitted by bounded views. This check
  * does not authenticate the list, prove semantic truth or grant a commit/retry.
- * 4096 supports cover the initial paired view plus eight bounded note responses.
+ * The support bound covers admitted large source packets and bounded note reads.
  */
 export function validateStandingHistoryShownOutput(value: unknown, shown: readonly StandingHistoryAnalysisSupport[]): StandingHistoryAnalysisOutput {
   const output = snapshotStandingHistoryAnalysisOutput(value);
-  const allowed = new Set(array(shown, 4096).map(value => {
+  const allowed = new Set(array(shown, MAX_SUPPORTS).map(value => {
     const support = data(value, ["sourceRef", "versionRef"]);
     if (!refValid(support.sourceRef, "hsrc") || !refValid(support.versionRef, "hver")) return fail("input");
     return support.sourceRef + ":" + support.versionRef;
@@ -99,18 +100,18 @@ export function validateStandingHistoryShownOutput(value: unknown, shown: readon
 }
 function materialCopy(value: unknown): StandingHistoryAnalysisMaterialRequest {
   const m = data(value, ["pageIndex", "maxBytes", "materialRef"], ["position", "maxRows"]);
-  if (!Number.isInteger(m.pageIndex) || Number(m.pageIndex) < 1 || Number(m.pageIndex) > 1024 || !Number.isInteger(m.maxBytes) || Number(m.maxBytes) < 1024 || Number(m.maxBytes) > 49152 ||
+  if (!Number.isInteger(m.pageIndex) || Number(m.pageIndex) < 1 || Number(m.pageIndex) > 1024 || !Number.isInteger(m.maxBytes) || Number(m.maxBytes) < 1024 || Number(m.maxBytes) > MATERIAL_BYTES ||
       Object.hasOwn(m, "maxRows") && (!Number.isInteger(m.maxRows) || Number(m.maxRows) < 1 || Number(m.maxRows) > 100) ||
       !refValid(m.materialRef, "hmat") || Object.hasOwn(m, "position") && (typeof m.position !== "string" || !/^hpos_(?:0|[1-9]\d{0,2})_[0-9a-f]{48}$/u.test(m.position))) return fail("input");
   return Object.freeze({ pageIndex: Number(m.pageIndex), maxBytes: Number(m.maxBytes), materialRef: m.materialRef, ...(Object.hasOwn(m, "position") ? { position: m.position as string } : {}),
     ...(Object.hasOwn(m, "maxRows") ? { maxRows: m.maxRows as number } : {}) });
 }
 function materialsCopy(value: unknown) {
-  const inputs = array(value, 8, 1).map(materialCopy);
+  const inputs = array(value, MAX_FRAGMENTS, 1).map(materialCopy);
   if (new Set(inputs.map(i => i.materialRef)).size !== inputs.length) return fail("overlap"); return Object.freeze(inputs);
 }
 function childrenCopy(value: unknown): readonly string[] {
-  const children = array(value, 8, 1); if (children.some(c => !refValid(c, "hnode"))) return fail("input");
+  const children = array(value, MAX_ANALYSIS_NODES, 1); if (children.some(c => !refValid(c, "hnode"))) return fail("input");
   if (new Set(children).size !== children.length) return fail("overlap"); return Object.freeze(children as string[]);
 }
 function overlap(a: StandingHistoryAnalysisSpan, b: StandingHistoryAnalysisSpan): boolean {
@@ -173,13 +174,15 @@ export async function openStandingHistoryAnalysisStore(input: Readonly<{
       bytes = Buffer.alloc(Number(before.size) + 1); let count = 0;
       while (count < bytes.length) { live(); const got = await file.read(bytes, count, bytes.length - count, null); if (!got.bytesRead) break; count += got.bytesRead; }
       if (count !== Number(before.size)) return fail("storage");
-      const value: unknown = JSON.parse(await decryptSession(bytes.subarray(0, count).toString("utf8"), passphrase));
+      const plain = await decryptSession(bytes.subarray(0, count).toString("utf8"), passphrase); if (Buffer.byteLength(plain) > MAX_NODE) return fail("limit");
+      const value: unknown = JSON.parse(plain);
       const after = await lstat(path, { bigint: true }); if (!after.isFile() || after.isSymbolicLink() || version(after) !== version(before)) return fail("storage");
       await check(); return { value, stamp: version(after) };
     } finally { bytes?.fill(0); await file.close(); }
   };
   const write = async (name: string, value: unknown): Promise<string> => {
-    await check(); const cipher = await encryptSession(JSON.stringify(value), passphrase); if (Buffer.byteLength(cipher) > MAX_CIPHER) return fail("limit"); await check();
+    const plain = JSON.stringify(value); if (Buffer.byteLength(plain) > MAX_NODE) return fail("limit");
+    await check(); const cipher = await encryptSession(plain, passphrase); if (Buffer.byteLength(cipher) > MAX_CIPHER) return fail("limit"); await check();
     const file = await open(join(slot, name), "wx", 0o600); try { await file.writeFile(cipher); await file.sync(); } finally { await file.close(); }
     const saved = await read(name); if (!equal(saved.value, value)) return fail("storage"); return saved.stamp;
   };
@@ -232,7 +235,7 @@ export async function openStandingHistoryAnalysisStore(input: Readonly<{
     if (n.index !== e.index || !refValid(n.nodeRef, "hnode") || !["leaf", "merge"].includes(n.kind as string)) return fail("binding");
     let requests: readonly StandingHistoryAnalysisMaterialRequest[] | readonly string[];
     if (n.kind === "leaf") {
-      const input = data(n.inputs, ["materials"]), materials = array(input.materials, 8, 1);
+      const input = data(n.inputs, ["materials"]), materials = array(input.materials, MAX_FRAGMENTS, 1);
       requests = Object.freeze(materials.map(value => {
         const m = data(value, ["pageIndex", "maxBytes", "materialRef", "pageHash", "range", "coverage", "supports"], ["position", "maxRows"]);
         return materialCopy({ pageIndex: m.pageIndex, maxBytes: m.maxBytes, materialRef: m.materialRef, ...(Object.hasOwn(m, "position") ? { position: m.position } : {}),

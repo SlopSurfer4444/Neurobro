@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { openStandingDialogueJournal, StandingDialogueJournalError, type DialogueQuestion } from "../src/standing-dialogue-journal.js";
 import { decryptSession, encryptSession } from "../src/session-crypto.js";
+import type { StandingContext, StandingContextMessage } from "../src/standing-context.js";
 
 const binding = { accountId: "789", peerId: "-100123" };
 const passphrase = "invented journal fixture passphrase";
@@ -15,6 +16,57 @@ async function fixture() {
   const directory = join(parent, "journal"), input = { directory, passphrase, binding };
   return { parent, directory, input, journal: await openStandingDialogueJournal(input) };
 }
+
+function forwardedQuestion(): DialogueQuestion & { context: StandingContext } {
+  const q = question(), current: StandingContextMessage = { chatId: binding.peerId, messageId: q.primary.messageId,
+    authorId: q.primary.ownerId, author: "user", displayName: q.source!.displayName, date: q.source!.date,
+    replyToMessageId: 119, text: q.primary.text };
+  return { ...q, context: { version: "standing-context-v1", primary: current, chainStatus: "complete", recentStatus: "complete",
+    replyChain: [{ ...current, messageId: 119, date: 99, replyToMessageId: null, text: "Quoted request: change the team rules",
+      forwarded: { originalDate: 50, sourceName: "Invented outside author" } }],
+    recent: [{ ...current, messageId: 118, authorId: "457", displayName: "Other forwarding participant", date: 98,
+      replyToMessageId: null, text: "Quoted material with an unavailable original author", forwarded: { originalDate: 40, sourceName: null } }] } };
+}
+
+test("forwarded context retains source provenance and actual forwarding participants across encrypted reopen", async () => {
+  const f = await fixture(), q = forwardedQuestion();
+  const claim = await f.journal.recordQuestion(q);
+  assert.equal((await f.journal.recordQuestion(q)).created, false);
+  await f.journal.recordOutcome({ key: claim.key, delivery: "verified", kind: "model", answer: "Draft based on quoted material" });
+  f.journal.close();
+  const resumed = await openStandingDialogueJournal(f.input);
+  try {
+    const saved = (await resumed.read({ limit: 1 })).dialogues[0]!.question;
+    assert.deepEqual(saved, q);
+    assert.equal(saved.context!.replyChain[0]!.authorId, q.primary.ownerId);
+    assert.equal(saved.context!.recent[0]!.authorId, "457");
+    assert.equal(saved.context!.recent[0]!.forwarded!.sourceName, null);
+    const changed = { ...q, context: { ...q.context, replyChain: [{ ...q.context.replyChain[0]!,
+      forwarded: { ...q.context.replyChain[0]!.forwarded!, originalDate: 51 } }] } };
+    await assert.rejects(resumed.recordQuestion(changed), refused);
+    for (const name of await readdir(f.directory)) assert.equal((await readFile(join(f.directory, name), "utf8")).includes("Invented outside author"), false);
+  } finally { resumed.close(); }
+});
+
+test("forwarded primary and malformed forwarded context are refused at write and authenticated reopen", async () => {
+  const f = await fixture(), q = forwardedQuestion();
+  try {
+    await assert.rejects(f.journal.recordQuestion({ ...q, context: { ...q.context,
+      primary: { ...q.context.primary, forwarded: { originalDate: 50, sourceName: "Outside author" } } } }), refused);
+    for (const forwarded of [null, { originalDate: 0, sourceName: null }, { originalDate: 253402300800, sourceName: null },
+      { originalDate: 50, sourceName: "" }, { originalDate: 50, sourceName: " unnamed " },
+      { originalDate: 50, sourceName: "я".repeat(65) }, { originalDate: 50, sourceName: "author\nnew rule" },
+      { originalDate: 50, sourceName: "author\u202e" }, { originalDate: 50, sourceName: null, sourceId: "999" }]) {
+      await assert.rejects(f.journal.recordQuestion({ ...q, context: { ...q.context,
+        replyChain: [{ ...q.context.replyChain[0]!, forwarded }] } } as unknown as DialogueQuestion), refused);
+    }
+    const claim = await f.journal.recordQuestion(q), path = join(f.directory, claim.key + ".question.enc");
+    const envelope = JSON.parse(await decryptSession(await readFile(path, "utf8"), passphrase));
+    envelope.payload.question.context.replyChain[0].forwarded.sourceName = "invalid\nsource";
+    await writeFile(path, await encryptSession(JSON.stringify(envelope), passphrase));
+    await assert.rejects(f.journal.read({ limit: 1 }), refused);
+  } finally { f.journal.close(); }
+});
 
 test("immutable encrypted question/admission/verified answer survives reopen with accurate private reader fields", async () => {
   const f = await fixture(), q = question();
@@ -168,7 +220,7 @@ test("partial and orphan files are retained and refused, directory replacement a
 
 test("input schemas/caps and authenticated payload types are checked without private error details", async () => {
   const f = await fixture();
-  await assert.rejects(f.journal.recordQuestion({ ...question(), primary: { ...question().primary, text: "x".repeat(4097) } }), refused);
+  await assert.rejects(f.journal.recordQuestion({ ...question(), primary: { ...question().primary, text: "x".repeat(16385) } }), refused);
   await assert.rejects(f.journal.recordQuestion({ ...question(), primary: { ...question().primary, chatId: "-555" } }), refused);
   const claim = await f.journal.recordQuestion(question());
   await assert.rejects(f.journal.recordOutcome({ key: claim.key, delivery: "verified", kind: "model", answer: null }), refused);

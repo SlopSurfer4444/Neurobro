@@ -144,7 +144,7 @@ test("abort during pending read retains no image bytes and exposes unsettled rea
   finish(f.readback); await result.settlement; assert.equal(f.records.at(-1)!.state, "unknown");
 });
 
-const TEST_BASE = join(tmpdir(), "neurobro-image-delivery-tests");
+const TEST_BASE = resolve(tmpdir(), "neurobro-public-image-outbox-tests");
 const PASSPHRASE = "synthetic-only-image-outbox-passphrase";
 async function diskCase(work: (directory: string) => Promise<void>) {
   await mkdir(TEST_BASE, { recursive: true }); const root = await mkdtemp(join(TEST_BASE, "case-"));

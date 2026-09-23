@@ -29,6 +29,17 @@ async function fixture(secret = passphrase, scope = scopeRef) {
   return { memory, references, abort, close() { memory.close(); references.close(); } };
 }
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+test("long full-text Russian primary retains exact own-action context binding", async () => {
+  const f = await fixture(), selected = { ...primary, text: "я".repeat(4095) + " конец" };
+  try {
+    f.memory.observe({ slot: "one", source: pilot() });
+    const page = f.memory.forPrimary({ primary: selected, asOf });
+    assert.equal(page.source.items.length, 1);
+    assert.equal(requireStandingOwnActionContext(page, selected, f.references, { scopeRef, asOf }), page);
+    assert.throws(() => requireStandingOwnActionContext(page, { ...selected, text: selected.text.slice(0, 2048) }, f.references, { scopeRef, asOf }));
+    assert.throws(() => f.memory.forPrimary({ primary: { ...selected, text: "я".repeat(8193) }, asOf }));
+  } finally { f.close(); }
+});
 test("actual persisted Pilot records populate one latest slot view; UNKNOWN and absent dates stay honest", async () => {
   const f = await fixture(), root = await mkdtemp(join(tmpdir(), "neurobro-own-memory-"));
   try {

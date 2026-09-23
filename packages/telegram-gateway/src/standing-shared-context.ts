@@ -3,6 +3,9 @@ import { types } from "node:util";
 import { snapshotStandingOwnActionView, type StandingOwnActionView } from "./standing-own-action-projection.js";
 import { snapshotStandingHistoryTaskIntent } from "./standing-history-task-store.js";
 import { requireStandingChronicleNote, type StandingChronicleNote } from "./standing-chronicle-note.js";
+import { STANDING_INCOMING_TEXT_BYTES } from "./standing-context.js";
+import { snapshotStandingHistoryTaskProgress, snapshotStandingHistoryTaskSavedProgress,
+  type StandingHistoryTaskProgress, type StandingHistoryTaskSavedProgress } from "./standing-history-task-progress.js";
 
 export const STANDING_SHARED_CONTEXT_MAX_BYTES = 8192;
 export type StandingSharedContextScope = Readonly<{ scopeRef: string; audience:
@@ -15,6 +18,8 @@ export type StandingSharedContextCoverage = Readonly<{
 type Evidence = Readonly<{ sourceRef: string; versionRef: string; observedAt: number | null }>;
 export type StandingSharedObservation = Evidence & Readonly<{
   kind: "observed-message" | "explicit-preference"; speakerRef: string; text: string;
+  /** speakerRef remains the forwarding participant, not the original author. */
+  forwarded?: Readonly<{ originalDate: number; sourceName: string | null; interpretation: "quoted-source-not-request" }>;
 }>;
 export type StandingSharedDialogue = Evidence & Readonly<{
   kind: "verified-dialogue"; question: Readonly<{ speakerRef: string; text: string }>;
@@ -24,13 +29,16 @@ export type StandingSharedDialogue = Evidence & Readonly<{
  * observed native result, complete analysis, execution permission or delivery. */
 export type StandingSharedTask = Evidence & Readonly<{
   kind: "task-state"; taskRef: string; control: "queued" | "cancelled" | "unavailable";
-  description?: Readonly<{ objective: string; fromDate: number; toDate: number; timezone: string }>;
+  description?: Readonly<{ objective: string; fromDate: number; toDate: number; timezone: string; source?: "community" }>;
   read: "partial" | "complete" | "inexact" | "unavailable";
   analysis: "none" | "committed" | "unavailable";
   outputPrepared: boolean | "unavailable"; nodeCommitted: boolean | "unavailable";
   modelOutcome: "not-recorded" | "observed" | "refused" | "unknown" | "unavailable";
   delivery: "not-inspected" | "not-attempted" | "partial" | "verified" | "unknown" | "failed-terminal" | "unavailable";
-  disposition: "none" | "coverage" | "stale" | "consumed-without-prepared" | "source-page-quota" | "overflow" | "unavailable";
+  disposition: "none" | "coverage" | "stale" | "consumed-without-prepared" | "source-page-quota" | "report-required" | "overflow" | "unavailable";
+  /** Historical evidence, including after invalidation. Neither authorizes work. */
+  savedProgress?: StandingHistoryTaskSavedProgress;
+  progress?: StandingHistoryTaskProgress;
 }>;
 type Source<T> = Readonly<{ items: readonly T[]; coverage: StandingSharedContextCoverage }>;
 export type StandingSharedContextInput = Readonly<{
@@ -85,8 +93,8 @@ function taskFact(value: unknown): boolean | "unavailable" { return value === "u
 function choice<T extends string>(value: unknown, choices: readonly T[]): T {
   if (typeof value !== "string" || !choices.includes(value as T)) return fail(); return value as T;
 }
-function text(value: unknown): string {
-  if (typeof value !== "string" || value.includes("\0") || Buffer.byteLength(value, "utf8") > 4096 || Buffer.from(value, "utf8").toString("utf8") !== value) return fail(); return value;
+function text(value: unknown, maximum = 4096): string {
+  if (typeof value !== "string" || value.includes("\0") || Buffer.byteLength(value, "utf8") > maximum || Buffer.from(value, "utf8").toString("utf8") !== value) return fail(); return value;
 }
 function evidence(v: Record<string, unknown>): Evidence {
   return { sourceRef: ref(v.sourceRef), versionRef: ref(v.versionRef), observedAt: v.observedAt === null ? null : time(v.observedAt) };
@@ -111,9 +119,20 @@ function coverage(value: unknown): StandingSharedContextCoverage {
   return result;
 }
 function observation(value: unknown): StandingSharedObservation {
-  const v = fields(value, ["kind", "sourceRef", "versionRef", "observedAt", "speakerRef", "text"]);
+  if (!value || typeof value !== "object" || types.isProxy(value)) return fail();
+  const hasForwarded = Object.hasOwn(value, "forwarded");
+  const v = fields(value, ["kind", "sourceRef", "versionRef", "observedAt", "speakerRef", "text", ...(hasForwarded ? ["forwarded"] : [])]);
   const kind = choice(v.kind, ["observed-message", "explicit-preference"]);
-  return { kind, ...evidence(v), speakerRef: speaker(v.speakerRef, kind !== "explicit-preference"), text: text(v.text) };
+  let forwarded: StandingSharedObservation["forwarded"];
+  if (hasForwarded) {
+    if (kind !== "observed-message") return fail();
+    const f = fields(v.forwarded, ["originalDate", "sourceName", "interpretation"]);
+    if (!Number.isSafeInteger(f.originalDate) || Number(f.originalDate) < 1 || Number(f.originalDate) > 253402300799) return fail();
+    const sourceName = f.sourceName === null ? null : text(f.sourceName);
+    if (sourceName !== null && (!sourceName.length || sourceName.trim() !== sourceName || Buffer.byteLength(sourceName, "utf8") > 128 || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(sourceName))) return fail();
+    forwarded = { originalDate: f.originalDate as number, sourceName, interpretation: choice(f.interpretation, ["quoted-source-not-request"]) };
+  }
+  return { kind, ...evidence(v), speakerRef: speaker(v.speakerRef, kind !== "explicit-preference"), text: text(v.text, kind === "observed-message" ? STANDING_INCOMING_TEXT_BYTES : 4096), ...(forwarded ? { forwarded } : {}) };
 }
 function chronicleEvidence(value: unknown): StandingSharedObservation | StandingChronicleNote {
   if (value && typeof value === "object" && !types.isProxy(value)) {
@@ -125,29 +144,37 @@ function chronicleEvidence(value: unknown): StandingSharedObservation | Standing
 function dialogue(value: unknown): StandingSharedDialogue {
   const v = fields(value, ["kind", "sourceRef", "versionRef", "observedAt", "question", "answer"]);
   const q = fields(v.question, ["speakerRef", "text"]), a = fields(v.answer, ["text"]);
-  return { kind: choice(v.kind, ["verified-dialogue"]), ...evidence(v), question: { speakerRef: speaker(q.speakerRef, false), text: text(q.text) }, answer: { text: text(a.text) } };
+  return { kind: choice(v.kind, ["verified-dialogue"]), ...evidence(v), question: { speakerRef: speaker(q.speakerRef, false), text: text(q.text, STANDING_INCOMING_TEXT_BYTES) }, answer: { text: text(a.text) } };
 }
 function task(value: unknown): StandingSharedTask {
   if (!value || typeof value !== "object" || types.isProxy(value)) return fail();
   const hasDescription = Object.hasOwn(value, "description");
-  const v = fields(value, ["kind", "sourceRef", "versionRef", "observedAt", "taskRef", "control", "read", "analysis", "outputPrepared", "nodeCommitted", "modelOutcome", "delivery", "disposition", ...(hasDescription ? ["description"] : [])]);
+  const hasSaved = Object.hasOwn(value, "savedProgress"), hasProgress = Object.hasOwn(value, "progress");
+  const v = fields(value, ["kind", "sourceRef", "versionRef", "observedAt", "taskRef", "control", "read", "analysis", "outputPrepared", "nodeCommitted", "modelOutcome", "delivery", "disposition", ...(hasDescription ? ["description"] : []), ...(hasSaved ? ["savedProgress"] : []), ...(hasProgress ? ["progress"] : [])]);
   if (typeof v.taskRef !== "string" || !/^htask_[0-9a-f]{48}$/u.test(v.taskRef)) return fail();
   let description: StandingSharedTask["description"];
   if (hasDescription) {
-    const d = fields(v.description, ["objective", "fromDate", "toDate", "timezone"]);
+    if (!v.description || typeof v.description !== "object" || types.isProxy(v.description)) return fail();
+    const hasSource = Object.hasOwn(v.description, "source");
+    const d = fields(v.description, ["objective", "fromDate", "toDate", "timezone", ...(hasSource ? ["source"] : [])]);
+    if (hasSource && d.source !== "community") return fail();
     // Reuse the source's date/timezone/text contract. Placeholder identities
     // are discarded; validation neither authenticates nor creates a task.
     const intent = snapshotStandingHistoryTaskIntent({ schema: "standing-history-task-v1", taskId: v.taskRef,
-      accountId: "1", chatId: "-1", requesterId: "2", primaryMessageId: 1, ...d });
-    description = { objective: intent.objective, fromDate: intent.fromDate, toDate: intent.toDate, timezone: intent.timezone };
+      accountId: "1", chatId: "-1", requesterId: "2", primaryMessageId: 1,
+      objective: d.objective, fromDate: d.fromDate, toDate: d.toDate, timezone: d.timezone });
+    description = { objective: intent.objective, fromDate: intent.fromDate, toDate: intent.toDate, timezone: intent.timezone,
+      ...(hasSource ? { source: "community" as const } : {}) };
   }
   return { kind: choice(v.kind, ["task-state"]), ...evidence(v), taskRef: v.taskRef,
     ...(description ? { description } : {}),
+    ...(hasSaved ? { savedProgress: snapshotStandingHistoryTaskSavedProgress(v.savedProgress) } : {}),
+    ...(hasProgress ? { progress: snapshotStandingHistoryTaskProgress(v.progress) } : {}),
     control: choice(v.control, ["queued", "cancelled", "unavailable"]), read: choice(v.read, ["partial", "complete", "inexact", "unavailable"]),
     analysis: choice(v.analysis, ["none", "committed", "unavailable"]), outputPrepared: taskFact(v.outputPrepared), nodeCommitted: taskFact(v.nodeCommitted),
     modelOutcome: choice(v.modelOutcome, ["not-recorded", "observed", "refused", "unknown", "unavailable"]),
     delivery: choice(v.delivery, ["not-inspected", "not-attempted", "partial", "verified", "unknown", "failed-terminal", "unavailable"]),
-    disposition: choice(v.disposition, ["none", "coverage", "stale", "consumed-without-prepared", "source-page-quota", "overflow", "unavailable"]) };
+    disposition: choice(v.disposition, ["none", "coverage", "stale", "consumed-without-prepared", "source-page-quota", "report-required", "overflow", "unavailable"]) };
 }
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object") { for (const child of Object.values(value)) deepFreeze(child); Object.freeze(value); } return value;
@@ -205,6 +232,7 @@ export function projectStandingSharedContext(input: StandingSharedContextInput,
     // quietly select a winner or accidentally double-count the same evidence.
     if (seen.has(identity)) return fail(); seen.add(identity);
     if (item.observedAt !== null && item.observedAt > asOf) return fail();
+    if (item.kind === "task-state" && ((item.savedProgress?.observedAt ?? 0) > asOf || (item.progress?.observedAt ?? 0) > asOf)) return fail();
   }
   const items: IncludedItem[] = [];
   const body = { schema: "standing-shared-context-v1" as const, scope: canonicalScope, asOf, items, coverage: projected,

@@ -34,6 +34,19 @@ class FakeRpc:
 
 
 class VisualWriteTests(unittest.TestCase):
+    def test_cancel_has_distinct_rpc_site_and_cannot_overwrite_prior_failure(self):
+        for prior in (None,'deadline','read'):
+            rpc=object.__new__(base.NativeRpc)
+            rpc._closed=rpc._input_closed=False;rpc._phase='model';rpc._unknown=False
+            rpc._failure={'code':'OK','site':'none','operation':'none','phase':'custody'}
+            rpc._operation='next_frame';rpc._cancel=threading.Event();rpc._queue=[];rpc._buffer=bytearray()
+            if prior is not None:
+                with self.assertRaises(base.NativeRpcError):rpc._fail('TRANSPORT_UNKNOWN',True,prior)
+            rpc.cancel()
+            with self.assertRaises(base.NativeRpcError):rpc._check()
+            self.assertEqual(rpc._failure['site'],prior or 'cancelled')
+            self.assertEqual(rpc._failure['operation'],'next_frame')
+
     def test_sixteen_max_visual_writes_preserve_ordinary_budget_and_actual_serialization(self):
         import base64,tempfile
         raw=load('visual_raw_rpc','rm-0032-native-rpc.py')

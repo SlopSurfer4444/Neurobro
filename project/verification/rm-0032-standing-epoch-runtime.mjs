@@ -9,14 +9,23 @@ import {types} from 'node:util';
 import {preparePacket,frameSource,SOURCE_NAMES} from './rm-0032-standing-epoch-host.mjs';
 import {snapshotEpochExtraToolsFromInput,snapshotEpochSessionModeFromInput,snapshotEpochAnalysisCallbacks,startOwnedEpoch} from './rm-0032-standing-epoch-owner.mjs';
 import {normalizeEpochOwnerRecord} from './rm-0032-standing-epoch-receipt.mjs';
+import {readStandingEpochRecovery} from './rm-0032-standing-epoch-recovery.mjs';
 
 const TOKEN=/^[a-f0-9]{32}$/u;
 const WSL='C:/Program Files/WSL/wsl.exe';
 // Provisional churn mitigation, not a per-turn relay-capacity guarantee.
 // Native hard limits stay unchanged; prepare rotates only after release.
 const SOFT_EPOCH_TURNS=6;
+export const COMMUNITY_ASSESSMENT_TIMEOUT_MS=30000;
 export class StandingEpochRuntimeError extends Error{constructor(code){super('STANDING_EPOCH_RUNTIME_'+code);this.code=code;}}
 const fail=code=>{throw new StandingEpochRuntimeError(code);};
+function snapshotWorkProfile(input){
+  if(!input||typeof input!=='object'||types.isProxy(input))return fail('CONFIG');
+  const descriptor=Object.getOwnPropertyDescriptor(input,'workProfile');
+  if(!descriptor)return undefined;
+  if(!Object.hasOwn(descriptor,'value')||!['team-assistant','community-team'].includes(descriptor.value))return fail('CONFIG');
+  return descriptor.value;
+}
 function capture(record,keys){
   if(!record||typeof record!=='object'||types.isProxy(record)||Object.getPrototypeOf(record)!==Object.prototype)return fail('CONFIG');
   const d=Object.getOwnPropertyDescriptors(record);
@@ -66,7 +75,7 @@ async function readFixedFile(path){
     const value=JSON.parse(text);if(JSON.stringify(value)+'\n'!==text)return fail('RECORD');return value;
   }finally{await file.close();}
 }
-function realStore(parent){
+export function createStandingEpochRecordStore(parent){
   const parentIdentity=directory(parent),attempts=new Map();
   const check=path=>{
     if(dirname(path)!==parent||!TOKEN.test(path.slice(parent.length+1))||!same(directory(parent),parentIdentity))return fail('DIRECTORY');
@@ -89,54 +98,84 @@ function realStore(parent){
 const settled=value=>value?.resourcesSettled===true&&value.persisted===true&&value.replacementReady===true;
 const REQUEST=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const ANALYSIS_NAMES=['neurobro_analysis_material','neurobro_analysis_notes','neurobro_analysis_commit'];
-function nativeBinding(value){
+function nativeBinding(value,purpose='history-analysis'){
   const v=capture(value,['epochId','requestRef','purpose']);
-  if(typeof v.epochId!=='string'||!TOKEN.test(v.epochId)||typeof v.requestRef!=='string'||!REQUEST.test(v.requestRef)||v.purpose!=='history-analysis')return fail('BINDING');return v;
+  if(typeof v.epochId!=='string'||!TOKEN.test(v.epochId)||typeof v.requestRef!=='string'||!REQUEST.test(v.requestRef)||v.purpose!==purpose)return fail('BINDING');return v;
 }
-const settlement=binding=>Object.freeze({schema:'standing-analysis-owner-settlement-v1',nativeBinding:binding,resourcesSettled:true,persisted:true,replacementReady:true,modelOutcome:'not-proven'});
+const settlement=binding=>Object.freeze({schema:binding.purpose==='community-assessment'?'standing-community-assessment-owner-settlement-v1':'standing-analysis-owner-settlement-v1',nativeBinding:binding,resourcesSettled:true,persisted:true,replacementReady:true,modelOutcome:'not-proven'});
 
 /** No model process starts until connection.prepare(). No selected turn is
  * retried here. Parent must not replay consumed requests on a new connection.
  * Injected ports are test-only; production supplies its admitted parent ACL. */
 export function prepareStandingEpochRuntime(input,ports={}){
   const sessionMode=snapshotEpochSessionModeFromInput(input),scoped=sessionMode!==undefined,mode=scoped?{sessionMode}:{};
+  const community=sessionMode==='standing-scoped-epoch-v2',threadLimit=community?3:scoped?2:1;
+  const workProfile=snapshotWorkProfile(input),profile=workProfile===undefined?{}:{workProfile};
   const {sources:sourceInput,pins:pinInput,attemptParent,workerToken,createWire,openSession,isTurnNotAdmitted=()=>false}=input??{};
   const sources=capture(sourceInput,Object.keys(SOURCE_NAMES)),pins=capture(pinInput,Object.keys(SOURCE_NAMES));
   if(!isAbsolute(attemptParent)||resolve(attemptParent)!==attemptParent||!TOKEN.test(workerToken)||typeof createWire!=='function'||typeof openSession!=='function'||typeof isTurnNotAdmitted!=='function')return fail('CONFIG');
-  preparePacket({sources,pins,token:'0'.repeat(32),...mode});
-  const storePort=ports.store??realStore(attemptParent),spawnPort=ports.spawn??spawn,openOwner=ports.openOwner??startOwnedEpoch;
+  preparePacket({sources,pins,token:'0'.repeat(32),...mode,...profile});
+  const storePort=ports.store??createStandingEpochRecordStore(attemptParent),spawnPort=ports.spawn??spawn,openOwner=ports.openOwner??startOwnedEpoch;
+  // Test-only shortening exercises the actual joined deadline path. Production
+  // never changes the conversation/native 300s limit or this assessment bound.
+  const assessmentTimeoutMs=ports.communityAssessmentTimeoutMs??COMMUNITY_ASSESSMENT_TIMEOUT_MS;
+  if(!Number.isSafeInteger(assessmentTimeoutMs)||assessmentTimeoutMs<1||assessmentTimeoutMs>COMMUNITY_ASSESSMENT_TIMEOUT_MS)return fail('CONFIG');
   const reserve=storePort.reserve?.bind(storePort),controller=storePort.controller?.bind(storePort),finish=storePort.finish?.bind(storePort);
   if([reserve,controller,finish,spawnPort,openOwner].some(p=>typeof p!=='function'))return fail('CONFIG');
   const env=Object.freeze({SystemRoot:process.env.SystemRoot,WINDIR:process.env.WINDIR,PATH:'C:/Windows/System32'});
   let blocked=false,lease=null,attemptCount=0;
-  async function verifyAnalysisSettlement(value){
-    if(!scoped)return fail('MODE');const binding=nativeBinding(value);
+  async function recoveryFor(binding){
+    try{return await readStandingEpochRecovery({directory:resolve(attemptParent,binding.epochId),epochId:binding.epochId});}
+    catch{return fail('PRIOR_OWNER_UNAVAILABLE');}
+  }
+  async function verifyScopedSettlement(value,purpose){
+    if(!scoped||purpose==='community-assessment'&&!community)return fail('MODE');const binding=nativeBinding(value,purpose);
     if(typeof storePort.verify!=='function')return fail('RECORD');
-    const record=await storePort.verify(resolve(attemptParent,binding.epochId));
+    let record,recovery;
+    try{record=await storePort.verify(resolve(attemptParent,binding.epochId));}
+    catch(error){
+      if(!error||types.isProxy(error)||Object.getOwnPropertyDescriptor(error,'code')?.value!=='ENOENT')throw error;
+      recovery=await recoveryFor(binding);
+      if(!recovery)return fail('PRIOR_OWNER_UNAVAILABLE');
+      record={intent:recovery.intent,actual:null};
+    }
     const pair=capture(record,['intent','actual']);
-    const intent=capture(pair.intent,['operation','workerToken','token','sourceSha256','sources','model','effort','threadLimit','turnLimit','sessionMode']);
+    const intent=capture(pair.intent,['operation','workerToken','token','sourceSha256','sources','model','effort','threadLimit','turnLimit','sessionMode',...Object.keys(profile)]);
+    // A v2 host may settle saved v1 history work under its ORIGINAL contract.
+    // Community work is never assigned to an old two-slot owner.
+    const savedMode=intent.sessionMode,savedV2=savedMode==='standing-scoped-epoch-v2';
+    if(savedMode!==sessionMode&&!(community&&purpose==='history-analysis'&&savedMode==='standing-scoped-epoch-v1'))return fail('RECORD');
     if(intent.operation!=='standing-native-epoch-v1'||typeof intent.workerToken!=='string'||!TOKEN.test(intent.workerToken)||intent.token!==binding.epochId||
-       typeof intent.sourceSha256!=='string'||!/^[a-f0-9]{64}$/u.test(intent.sourceSha256)||intent.sessionMode!==sessionMode||
-       intent.model!=='gpt-6-astra'||intent.effort!=='medium'||intent.threadLimit!==2||intent.turnLimit!==16)return fail('RECORD');
+       typeof intent.sourceSha256!=='string'||!/^[a-f0-9]{64}$/u.test(intent.sourceSha256)||
+       intent.model!=='gpt-6-astra'||intent.effort!=='medium'||intent.threadLimit!==(savedV2?3:2)||intent.turnLimit!==16||intent.workProfile!==workProfile)return fail('RECORD');
     const oldPins=capture(intent.sources,Object.keys(SOURCE_NAMES));if(Object.values(oldPins).some(pin=>typeof pin!=='string'||!/^[a-f0-9]{64}$/u.test(pin)))return fail('RECORD');
+    if(recovery)return settlement(binding);
     const actual=normalizeEpochOwnerRecord(pair.actual,binding.epochId);
-    if(!actual.resourcesSettled||!actual.replacementReady||!actual.diagnostics)return fail('SETTLEMENT_UNKNOWN');
+    if(!actual.resourcesSettled||!actual.replacementReady){
+      recovery=await recoveryFor(binding);
+      if(recovery)return settlement(binding);
+      return fail('PRIOR_OWNER_UNAVAILABLE');
+    }
+    if(!actual.diagnostics)return fail('SETTLEMENT_UNKNOWN');
     for(const receipt of [actual.diagnostics.epoch,actual.diagnostics.supervisor?.client]){
-      if(receipt!=null&&receipt.schema!=='decadans.rm0032.standing-scoped-epoch.v1')return fail('MODE');
+      if(receipt!=null&&receipt.schema!=='decadans.rm0032.standing-scoped-epoch.'+(savedV2?'v2':'v1'))return fail('MODE');
     }
     // Request membership comes from the encrypted lease-produced reservation.
     // This record proves its OWNER settled, not request dispatch or observation.
     return settlement(binding);
   }
+  const verifyAnalysisSettlement=value=>verifyScopedSettlement(value,'history-analysis');
+  const verifyCommunityAssessmentSettlement=value=>verifyScopedSettlement(value,'community-assessment');
   function openConnection(input){
     if(blocked||lease)return fail('STATE');
+    if(snapshotWorkProfile(input)!==workProfile)return fail('CONFIG');
     let extraTools;try{extraTools=snapshotEpochExtraToolsFromInput(input);}catch{return fail('CONFIG');}
     if(scoped&&((extraTools?.length??0)+4>32||extraTools?.some(tool=>ANALYSIS_NAMES.includes(tool.name))))return fail('CONFIG');
     const signal=input?.signal,historyPort=input?.history,historyCall=historyPort?.call;
     if(!(signal instanceof AbortSignal)||signal.aborted||typeof historyCall!=='function')return fail('CONFIG');
     const history=Object.freeze({call:(...args)=>Reflect.apply(historyCall,historyPort,args)});
     const control=new AbortController(),seen=new Set(),releasedAnalysis=new Set();let owner=null,opening=null,closing=null,busy=false,pending=null,attempt=null,localFault=false,failedTurn=false;
-    let analysisLease=null,analysisBinding=null,failedAnalysisTurn=false,conversationRestorationPending=false;
+    let analysisLease=null,analysisBinding=null,failedAnalysisTurn=false,failedCommunityAssessmentTurn=false,conversationRestorationPending=false;
     const route=()=>{
       if(!analysisBinding||analysisBinding.revoked||!analysisLease||analysisLease.closed||control.signal.aborted||signal.aborted)return fail('ANALYSIS_SCOPE');
       return analysisBinding;
@@ -179,10 +218,10 @@ export function prepareStandingEpochRuntime(input,ports={}){
     }
     const abort=()=>{void close();};signal.addEventListener('abort',abort,{once:true});
     async function createOwner(){
-      const token=randomBytes(16).toString('hex'),path=resolve(attemptParent,token),packet=preparePacket({sources,pins,token,...mode});
+      const token=randomBytes(16).toString('hex'),path=resolve(attemptParent,token),packet=preparePacket({sources,pins,token,...mode,...profile});
       const ownedAttempt={token,path,record:null};attempt=ownedAttempt;attemptCount++;
       try{
-        reserve(path,{operation:'standing-native-epoch-v1',workerToken,token,sourceSha256:packet.sourceSha256,sources:packet.pins,model:'gpt-6-astra',effort:'medium',threadLimit:scoped?2:1,turnLimit:16,...mode});
+        reserve(path,{operation:'standing-native-epoch-v1',workerToken,token,sourceSha256:packet.sourceSha256,sources:packet.pins,model:'gpt-6-astra',effort:'medium',threadLimit,turnLimit:16,...mode,...profile});
         if(control.signal.aborted)return fail('STOPPED');
         const value=await openOwner({epochId:token,bootstrap:frameSource(packet.source),signal:control.signal,history,createWire,openSession,
           ...(extraTools===undefined?{}:{extraTools}),
@@ -268,10 +307,28 @@ export function prepareStandingEpochRuntime(input,ports={}){
             return Object.freeze({schema:'standing-analysis-owner-ready-v1',nativeBinding:binding,basis,modelOutcome:'not-proven'});
           });
         },
-        async acquireAnalysisAdmission(requestRef,previousValue){
+        async acquireAnalysisAdmission(requestRef,previousValue,options){
+          const requireNewEpoch=options===undefined?false:capture(options,['requireNewEpoch']).requireNewEpoch;
+          if(options!==undefined&&requireNewEpoch!==true)return fail('CONFIG');
+          const previous=previousValue===undefined?undefined:nativeBinding(previousValue);
+          if(requireNewEpoch&&!previous)return fail('CONFIG');
+          if(requireNewEpoch){
+            if(typeof requestRef!=='string'||!REQUEST.test(requestRef)||seen.has(requestRef)||requestRef===previous.requestRef)return fail('ANALYSIS_ADMISSION');
+            await exclusive(async()=>{
+              if(pending!==null)return fail('ANALYSIS_ADMISSION');
+              if(attempt?.token===previous.epochId){
+                if(!releasedAnalysis.has(previous.requestRef))return fail('ANALYSIS_ADMISSION');
+                const result=await settleOwner();if(!result.replacementReady)return fail('SETTLEMENT_UNKNOWN');
+                owner=null;attempt=null;seen.clear();releasedAnalysis.clear();
+              }
+              await verifyAnalysisSettlement(previous);
+              if(closing||blocked||signal.aborted||control.signal.aborted)return fail('STATE');
+              if(!owner){opening=createOwner();try{await opening;}finally{opening=null;}}
+            });
+          }
           if(typeof requestRef!=='string'||!REQUEST.test(requestRef)||seen.has(requestRef)||busy||analysisLease||closing||blocked||signal.aborted||control.signal.aborted||
              !owner||!attempt||pending!==null||owner.admission()!=='ready'||seen.size>=SOFT_EPOCH_TURNS)return fail('ANALYSIS_ADMISSION');
-          const previous=previousValue===undefined?undefined:nativeBinding(previousValue);
+          if(requireNewEpoch&&previous.epochId===attempt.token)return fail('ANALYSIS_ADMISSION');
           const selectedOwner=owner,selectedAttempt=attempt,binding=nativeBinding({epochId:attempt.token,requestRef,purpose:'history-analysis'});
           const held={closed:false,phase:'unused',active:null,closing:null,settling:null};analysisLease=held;
           const guard=()=>{
@@ -301,18 +358,26 @@ export function prepareStandingEpochRuntime(input,ports={}){
             }finally{held.closed=true;if(analysisLease===held)analysisLease=null;}
           })();
           try{
-            if(previous&&!(previous.epochId===selectedAttempt.token&&releasedAnalysis.has(previous.requestRef)))await verifyAnalysisSettlement(previous);
+            if(previous&&(requireNewEpoch||!(previous.epochId===selectedAttempt.token&&releasedAnalysis.has(previous.requestRef))))await verifyAnalysisSettlement(previous);
             guard();
           }catch(error){held.closed=true;if(analysisLease===held)analysisLease=null;throw error;}
           return Object.freeze({nativeBinding:binding,
             turnAnalysis:(ref,body,callbacks)=>{
               let captured;try{captured=snapshotEpochAnalysisCallbacks(callbacks);}catch{return Promise.reject(new StandingEpochRuntimeError('CONFIG'));}
               return invoke(async()=>{
-                guard();if(held.phase!=='unused'||ref!==requestRef||pending!==null||owner.admission()!=='ready'||seen.size>=SOFT_EPOCH_TURNS)return fail('ANALYSIS_ADMISSION');
+                guard();if(held.phase!=='unused'||ref!==requestRef||pending!==null||seen.size>=SOFT_EPOCH_TURNS)return fail('ANALYSIS_ADMISSION');
+                // Time may advance after acquisition. The exact selected session
+                // owns the final limit check and its branded no-dispatch proof.
                 held.phase='turn';seen.add(requestRef);pending=requestRef;
                 analysisBinding={nativeBinding:binding,handlers:captured.analysisTools,shown:captured.onToolResultSent,revoked:false};
                 try{const result=await selectedOwner.turnAnalysis(requestRef,body);held.phase='completed';return result;}
-                catch(error){failedAnalysisTurn=true;held.phase='failed';throw error;}
+                catch(error){
+                  if(isTurnNotAdmitted(error)===true)held.phase='refused';
+                  else {failedAnalysisTurn=true;held.phase='failed';}
+                  // Keep the old binding and lease until the caller persists its
+                  // disposition and joins this owner. Never rotate this attempt.
+                  throw error;
+                }
               });
             },
             releaseAnalysis:ref=>invoke(async()=>{
@@ -324,9 +389,77 @@ export function prepareStandingEpochRuntime(input,ports={}){
           });
         },
       }:{}),
+      ...(community?{
+        verifyCommunityAssessmentSettlement,
+        async acquireCommunityAssessmentAdmission(requestRef){
+          if(typeof requestRef!=='string'||!REQUEST.test(requestRef)||seen.has(requestRef)||busy||analysisLease||closing||blocked||signal.aborted||control.signal.aborted||
+             !owner||!attempt||pending!==null||owner.admission()!=='ready'||seen.size>=SOFT_EPOCH_TURNS)return fail('COMMUNITY_ASSESSMENT_ADMISSION');
+          const selectedOwner=owner,selectedAttempt=attempt,binding=nativeBinding({epochId:attempt.token,requestRef,purpose:'community-assessment'},'community-assessment');
+          // The same lease lane excludes conversation and history work. No
+          // history handlers or participant admission are attached to this scope.
+          const held={closed:false,phase:'unused',active:null,closing:null,settling:null};analysisLease=held;
+          const guard=()=>{
+            if(held.closed||held.closing||held.settling||analysisLease!==held||owner!==selectedOwner||attempt!==selectedAttempt||closing||blocked||signal.aborted||control.signal.aborted)return fail('COMMUNITY_ASSESSMENT_ADMISSION');
+          };
+          const invoke=operation=>{
+            if(held.active)return Promise.reject(new StandingEpochRuntimeError('STATE'));
+            const actual=Promise.resolve().then(operation);held.active=actual;
+            void actual.finally(()=>{if(held.active===actual)held.active=null;}).catch(()=>{});return actual;
+          };
+          const abortAndJoin=()=>{
+            if(held.closed)return Promise.reject(new StandingEpochRuntimeError('COMMUNITY_ASSESSMENT_ADMISSION'));
+            return held.settling??=(async()=>{
+              const proof=await settleOwner();
+              if(!proof.replacementReady||!selectedAttempt.record?.resourcesSettled||!selectedAttempt.record?.replacementReady)return fail('SETTLEMENT_UNKNOWN');
+              if(held.active)await held.active.catch(()=>{});
+              if(owner===selectedOwner){owner=null;attempt=null;pending=null;seen.clear();releasedAnalysis.clear();}
+              held.phase='settled';return settlement(binding);
+            })();
+          };
+          const releaseHeld=()=>held.closing??=(async()=>{
+            try{
+              if(held.active||!['unused','released','settled'].includes(held.phase))await abortAndJoin();
+              else if(held.settling)await held.settling;
+            }finally{held.closed=true;if(analysisLease===held)analysisLease=null;}
+          })();
+          return Object.freeze({nativeBinding:binding,
+            turnCommunityAssessment:(ref,body)=>{
+              let timer,timedOut=false,rejectDeadline;
+              const deadline=new Promise((_resolve,reject)=>{rejectDeadline=reject;});
+              const turning=invoke(async()=>{
+              guard();if(held.phase!=='unused'||ref!==requestRef||pending!==null||owner.admission()!=='ready'||seen.size>=SOFT_EPOCH_TURNS)return fail('COMMUNITY_ASSESSMENT_ADMISSION');
+              held.phase='turn';seen.add(requestRef);pending=requestRef;
+              // The source-bound scoped session owns exact packet/decision
+              // parsing. Keep that one contract instead of a second JS parser.
+              timer=setTimeout(()=>{
+                timedOut=true;failedCommunityAssessmentTurn=true;
+                void abortAndJoin().then(
+                  ()=>rejectDeadline(new StandingEpochRuntimeError('COMMUNITY_ASSESSMENT_TIMEOUT')),
+                  ()=>rejectDeadline(new StandingEpochRuntimeError('SETTLEMENT_UNKNOWN')));
+              },assessmentTimeoutMs);
+              try{const result=await selectedOwner.turnCommunityAssessment(ref,body);held.phase='completed';return result;}
+              catch(error){failedCommunityAssessmentTurn=true;held.phase='failed';throw error;}
+              finally{clearTimeout(timer);}
+              });
+              // Join outside held.active: abortAndJoin must itself join that
+              // exact active operation before it can prove replacement safe.
+              // Failed physical settlement also returns within the existing
+              // cleanup bound; it blocks replacement rather than waiting on an
+              // unjoined native turn or presenting it as a reusable timeout.
+              return Promise.race([deadline,turning.then(value=>timedOut?deadline:value,error=>{if(timedOut)return deadline;throw error;})]);
+            },
+            releaseCommunityAssessment:ref=>invoke(async()=>{
+              guard();if(ref!==requestRef||held.phase!=='completed'||pending!==requestRef)return fail('RELEASE_REQUIRED');
+              try{await selectedOwner.releaseCommunityAssessment(ref);pending=null;held.phase='released';}
+              catch(error){failedCommunityAssessmentTurn=true;held.phase='failed';throw error;}
+            }),
+            abortAndJoin,close:releaseHeld,
+          });
+        },
+      }:{}),
       close,
-      state:()=>Object.freeze({blocked,closed:!!closing,busy:busy||analysisLease!==null,prepared:!!owner,pendingRelease:pending!==null,failedTurn,...(scoped?{failedAnalysisTurn}:{})}),
+      state:()=>Object.freeze({blocked,closed:!!closing,busy:busy||analysisLease!==null,prepared:!!owner,pendingRelease:pending!==null,failedTurn,...(scoped?{failedAnalysisTurn}:{}),...(community?{failedCommunityAssessmentTurn}:{})}),
     });
   }
-  return Object.freeze({openConnection,...(scoped?{verifyAnalysisSettlement}:{}),state:()=>Object.freeze({blocked,connectionOpen:lease!==null,attempts:attemptCount})});
+  return Object.freeze({openConnection,...(scoped?{verifyAnalysisSettlement}:{}),...(community?{verifyCommunityAssessmentSettlement}:{}),state:()=>Object.freeze({blocked,connectionOpen:lease!==null,attempts:attemptCount})});
 }

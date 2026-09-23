@@ -112,6 +112,77 @@ def analysis_payload_fixture():
 
 
 class NativeTests(unittest.TestCase):
+    def test_large_analysis_material_exact_bytes_and_foreground_refusal(self):
+        names = ("neurobro_analysis_material", "neurobro_analysis_notes", "neurobro_analysis_commit")
+        entries = [extra(name) for name in names]
+        config = {"web_search": "disabled", "features.image_generation": False}
+        payload = '{}' + '\t' * (m.ANALYSIS_TOOL_TEXT_CAP - 2)
+        result = {"success": True, "contentItems": [{"type": "inputText", "text": payload}]}
+        def plan(turn):
+            frame = request(turn); frame['params'].update(tool=names[0], arguments={'value':1})
+            return [frame, completed(turn)]
+        rpc = Rpc(plan)
+        actor = engine(rpc, lambda *_: copy.deepcopy(result), extra_tools=entries, thread_config=config)
+        got = actor.run('Synthetic large material')
+        self.assertEqual(got['metadata']['code'], 'OK')
+        self.assertGreater(got['metadata']['toolResultBytes'], 2 * 1024 * 1024)
+        self.assertEqual(rpc.responses[0][1], result)
+        with self.assertRaises(m.Refused): engine()._tool_content(result['contentItems'])
+        with self.assertRaises(m.Refused): actor._tool_content([{'type':'inputText','text':payload+' '}])
+
+    def test_seven_maximum_escaped_reads_leave_commit_reservation(self):
+        names = ("neurobro_analysis_material", "neurobro_analysis_notes", "neurobro_analysis_commit")
+        entries = [extra(name) for name in names]
+        config = {"web_search": "disabled", "features.image_generation": False}
+        payload = '{}' + '\t' * (m.ANALYSIS_TOOL_TEXT_CAP - 2)
+        result = {"success": True, "contentItems": [{"type": "inputText", "text": payload}]}
+        called = []
+        def plan(turn):
+            return [named_request(turn, names[0] if i == 0 else names[1] if i < 7 else names[2], rpc_id=i+1, call_id='large-'+str(i)) for i in range(8)] + [completed(turn)]
+        def tool(params, seconds):
+            called.append(params['tool'])
+            return copy.deepcopy(result if len(called) < 8 else RESULT)
+        actor = engine(Rpc(plan), tool, extra_tools=entries, thread_config=config)
+        got = actor.run('Seven large reads and commit')
+        self.assertEqual(got['metadata']['code'], 'OK')
+        self.assertEqual(got['metadata']['toolCalls'], 8)
+        self.assertEqual(got['metadata']['toolRefusals'], 0)
+        self.assertEqual(called[-1], names[2])
+        self.assertGreater(got['metadata']['toolResultBytes'], 14 * 1024 * 1024)
+        self.assertGreaterEqual(m.ANALYSIS_TOOL_TURN_WIRE_CAP, 8*m.ANALYSIS_TOOL_REPLY_RESERVATION + m.TOOL_REFUSAL_CAP*1024)
+
+    def test_token_usage_sanitized_accessor_is_optional_and_resets(self):
+        counts = dict(totalTokens=20,inputTokens=10,cachedInputTokens=2,outputTokens=10,reasoningOutputTokens=4)
+        def plan(turn):
+            return [{'method':'thread/tokenUsage/updated','params':{'threadId':'thread-1','turnId':turn,'tokenUsage':{'last':counts,'total':counts,'modelContextWindow':1000,'private':'not exported'}}}, completed(turn)]
+        actor = engine(Rpc(plan))
+        self.assertIsNone(actor.token_usage_metadata())
+        self.assertEqual(actor.run('usage')['metadata']['code'], 'OK')
+        self.assertEqual(actor.token_usage_metadata(), {'last':counts,'total':counts,'modelContextWindow':1000})
+        actor._rpc.plan = lambda turn: [completed(turn)]
+        self.assertEqual(actor.run('no usage')['metadata']['code'], 'OK')
+        self.assertIsNone(actor.token_usage_metadata())
+
+    def test_processing_deadline_opt_in_validated_and_bounded_by_remaining_turn(self):
+        for invalid in (None, 0, 1, 'true'):
+            with self.subTest(invalid=invalid), self.assertRaises(m.Refused):
+                engine(tool_processing_deadline=invalid)
+        for opt_in, expected in ((False, 20.0), (True, 25.0)):
+            with self.subTest(opt_in=opt_in):
+                now, seen = [100.0], []
+                rpc = Rpc(lambda turn: [request(turn), completed(turn)])
+                original = rpc.next_frame
+                def next_frame(seconds):
+                    if not seen: now[0] = 200.0
+                    return original(seconds)
+                rpc.next_frame = next_frame
+                def tool(params, seconds):
+                    seen.append(seconds)
+                    return copy.deepcopy(RESULT)
+                result = engine(rpc, tool, clock=lambda: now[0], tool_processing_deadline=opt_in).run('Synthetic request')
+                self.assertEqual(result['metadata']['code'], 'OK')
+                self.assertEqual(seen, [expected])
+
     def test_default_thread_config_preserves_exact_reviewed_request(self):
         for kwargs in ({}, {"thread_config": None}, {"enable_web": True}):
             with self.subTest(kwargs=kwargs):
@@ -709,6 +780,38 @@ class NativeTests(unittest.TestCase):
         with self.assertRaises(m.Refused):e._count_frame(noisy,facts)
         self.assertEqual(facts['eventBytes'],m.EVENT_BYTES_CAP+1)
 
+    def test_analysis_ordinary_event_aggregate_is_larger_but_finite(self):
+        _, entries, config = analysis_payload_fixture()
+        def plan(turn):
+            return [{"method":"configWarning","params":{"summary":"x"*16384}} for _ in range(20)] + [completed(turn)]
+        result = engine(Rpc(plan), extra_tools=entries, thread_config=config).run("Merge")
+        self.assertEqual(result["metadata"]["code"], "OK")
+        self.assertGreater(result["metadata"]["eventBytes"], m.EVENT_BYTES_CAP)
+        ordinary = engine(Rpc(plan)).run("Chat")
+        self.assertEqual(ordinary["metadata"]["code"], "BOUNDS_REFUSED")
+        self.assertEqual(ordinary["metadata"]["eventBytes"], m.EVENT_BYTES_CAP+1)
+        assessment = engine(Rpc(plan), thread_config=config, isolation_mode="community-assessment").run("Assess")
+        self.assertEqual(assessment["metadata"]["code"], "BOUNDS_REFUSED")
+        self.assertEqual(assessment["metadata"]["eventBytes"], m.EVENT_BYTES_CAP+1)
+        def overflow(turn):
+            return [{"method":"configWarning","params":{"summary":"x"*16384}} for _ in range(129)] + [completed(turn)]
+        target = engine(Rpc(overflow), extra_tools=entries, thread_config=config)
+        refused = target.run("Merge")
+        self.assertEqual(refused["metadata"]["code"], "BOUNDS_REFUSED")
+        self.assertEqual(refused["metadata"]["failureSite"], "events")
+        self.assertEqual(refused["metadata"]["eventBytes"], m.ANALYSIS_EVENT_BYTES_CAP+1)
+        self.assertEqual(target.run("Again")["metadata"]["code"], "SESSION_POISONED")
+
+    def test_analysis_does_not_expand_exchange_or_event_count(self):
+        _, entries, config = analysis_payload_fixture()
+        rpc = Rpc(); rpc.exchange = lambda *args: ({"large":"x"*m.EVENT_BYTES_CAP}, None)
+        result = engine(rpc, extra_tools=entries, thread_config=config).run("Merge")
+        self.assertEqual(result["metadata"]["failureSite"], "exchange")
+        rpc = Rpc(lambda turn: [{"method":"configWarning","params":{"summary":"x"}} for _ in range(513)])
+        result = engine(rpc, extra_tools=entries, thread_config=config).run("Merge")
+        self.assertEqual(result["metadata"]["code"], "BOUNDS_REFUSED")
+        self.assertEqual(result["metadata"]["eventCount"], 513)
+
     def test_analysis_max_commit_payload_and_compatible_echoes_use_existing_lifecycle_budget(self):
         args, entries, config = analysis_payload_fixture(); original = copy.deepcopy(args)
         calls = []; rpc = Rpc(lambda t: [named_request(t, "neurobro_analysis_commit", args), completed(t)])
@@ -748,9 +851,9 @@ class NativeTests(unittest.TestCase):
             facts = m.metadata()
             with self.subTest(label=label):
                 with self.assertRaises(m.Refused):
-                    for _ in range(4): e._count_frame(candidate, facts)
+                    for _ in range(40): e._count_frame(candidate, facts)
                 self.assertEqual(facts["historyLifecycleBytes"], 0)
-                self.assertEqual(facts["eventBytes"], m.EVENT_BYTES_CAP+1)
+                self.assertEqual(facts["eventBytes"], e._event_bytes_cap()+1)
                 self.assertEqual(candidate, original)
 
     def test_analysis_payload_lifecycle_cap_and_ordinary_agent_noise_remain_enforced(self):
@@ -759,14 +862,15 @@ class NativeTests(unittest.TestCase):
                 "arguments": args, "status": "completed", **RESULT}
         frame = completed("turn-1", items=[item, message("turn-1")]); original = copy.deepcopy(frame); facts = m.metadata()
         with self.assertRaises(m.Refused):
-            for _ in range(30): e._count_frame(frame, facts)
-        self.assertEqual(facts["historyLifecycleBytes"], m.HISTORY_LIFECYCLE_CAP+1)
+            facts["historyLifecycleBytes"] = m.ANALYSIS_LIFECYCLE_CAP
+            e._count_frame(frame, facts)
+        self.assertEqual(facts["historyLifecycleBytes"], m.ANALYSIS_LIFECYCLE_CAP+1)
         self.assertLess(facts["eventBytes"], m.EVENT_BYTES_CAP)
         self.assertEqual(frame, original)
-        noisy = completed("turn-1", items=[item, message("turn-1", "x"*m.EVENT_BYTES_CAP)])
+        noisy = completed("turn-1", items=[item, message("turn-1", "x"*m.ANALYSIS_EVENT_BYTES_CAP)])
         facts = m.metadata()
         with self.assertRaises(m.Refused): e._count_frame(noisy, facts)
-        self.assertEqual(facts["eventBytes"], m.EVENT_BYTES_CAP+1)
+        self.assertEqual(facts["eventBytes"], m.ANALYSIS_EVENT_BYTES_CAP+1)
 
     def test_analysis_payload_changed_echo_still_fails_original_fingerprint(self):
         args, entries, config = analysis_payload_fixture(); calls = []
@@ -822,5 +926,29 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(result["metadata"]["toolCalls"], 8)
         self.assertEqual(result["metadata"]["toolRefusals"], 0)
 
+
+
+class CommunityIsolationTests(unittest.TestCase):
+    def config(self):return {'isolation_mode':'community-assessment','thread_config':{'web_search':'disabled','features.image_generation':False}}
+    def test_empty_native_registry_and_exact_disabled_config_preserve_global_restrictions(self):
+        rpc=Rpc();actor=engine(rpc,**self.config());self.assertEqual(actor.tool_names(),())
+        value=actor.run('Assess supplied text');self.assertEqual(value['metadata']['outcome'],'observed')
+        params=rpc.calls[0][1];expected=actor._reviewed.thread_params()
+        expected['dynamicTools']=[];expected['config'].update(web_search='disabled',**{'features.image_generation':False})
+        self.assertEqual(params,expected)
+    def test_hostile_isolation_cannot_select_tools_or_builtin_config(self):
+        for patch in ({'isolation_mode':'analysis'},{'isolation_mode':True},{'isolation_mode':[]},{'thread_config':None},
+                      {'extra_tools':[extra()]},{'extra_tools':[]},{'enable_web':True}):
+            rpc=Rpc()
+            with self.assertRaises(m.Refused):engine(rpc,**{**self.config(),**patch})
+            self.assertEqual(rpc.calls,[])
+    def test_unregistered_dynamic_and_builtin_calls_never_invoke_callback(self):
+        for frame in (lambda t:request(t),lambda t:web_event(t,web_item()),
+                      lambda t:web_event(t,{'id':'command','type':'commandExecution','command':'echo nope','status':'completed'})):
+            calls=[];rpc=Rpc(lambda t:[frame(t),completed(t)])
+            value=engine(rpc,lambda *args:calls.append(args),**self.config()).run('Assess')
+            self.assertNotEqual(value['metadata']['outcome'],'observed')
+            self.assertTrue(value['metadata']['sessionPoisoned']);self.assertEqual(calls,[])
+            self.assertEqual(rpc.responses,[])
 
 if __name__ == "__main__": unittest.main()

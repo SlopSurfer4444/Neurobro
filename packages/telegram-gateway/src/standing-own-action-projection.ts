@@ -177,10 +177,11 @@ function project(value: StandingOwnActionProjectionInput): StandingOwnActionView
   const bound = (a: { accountId: string; chatId: string }) => { if (a.accountId !== b.accountId || a.chatId !== b.chatId) return fail(); };
   if (s.family === "pilot") {
     data(s, ["family", "record"], ["reply"]);
-    const r = data(s.record, ["version", "state", "idempotencyKey", "randomId", "chatId", "accountId", "replyToMessageId", "contentHash", "textBytes"], ["messageId"]);
+    const r = data(s.record, ["version", "state", "idempotencyKey", "randomId", "chatId", "accountId", "replyToMessageId", "contentHash", "textBytes"], ["messageId", "wireReplyToMessageId"]);
     bound(s.record); state = verdict(r.state); terminal = r; operation = "send-text";
     if (r.version !== "pilot-outbox-v1" || !one(r.state, ["planned", "sending", "verified", "unknown", "failed_terminal"]) || !long(r.randomId) || !hex(r.contentHash) || !integer(r.textBytes, 4096) || !(r.replyToMessageId === null || msg(r.replyToMessageId)) ||
         (state === "verified") !== Object.hasOwn(r, "messageId") || Object.hasOwn(r, "messageId") && !msg(r.messageId) ||
+        Object.hasOwn(r, "wireReplyToMessageId") && (state !== "verified" || r.wireReplyToMessageId !== null || !msg(r.replyToMessageId)) ||
         r.idempotencyKey !== jsonHash([r.chatId, r.replyToMessageId === null ? "owner-greeting" : "owner-prompt", r.replyToMessageId, r.replyToMessageId === null ? "message" : "reply", r.contentHash])) return fail();
     let text: string | null = null;
     if (s.reply) {

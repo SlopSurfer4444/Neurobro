@@ -4,7 +4,7 @@ import { createDecipheriv, createHash, scryptSync } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
-import { assertPilotPrivateDirectory, createEncryptedPilotStore, isPilotDeliveryDiagnostic, PilotPreDispatchError, runPilotReply, type PilotDeliveryDiagnostic, type PilotDirectoryInspection, type PilotReadback, type PilotRecord, type PilotReplyInput } from "../src/pilot-outbox.js";
+import { assertPilotPrivateDirectory, createEncryptedPilotStore, isPilotDeliveryDiagnostic, PilotPreDispatchError, runPilotReply, tagPilotTaskSendError, type PilotDeliveryDiagnostic, type PilotDirectoryInspection, type PilotReadback, type PilotRecord, type PilotReplyInput } from "../src/pilot-outbox.js";
 import type { TelegramTextEntity } from "../src/telegram-text-format.js";
 
 function setup() {
@@ -64,6 +64,41 @@ test("legacy absence preserves exact content hash, idempotency and send property
   assert.equal((await runPilotReply(f.input)).state, "verified");
   assert.equal(f.records[0]!.contentHash, contentHash);
   assert.equal(f.records[0]!.idempotencyKey, hash(JSON.stringify(["-123", "owner-prompt", 789, "reply", contentHash])));
+});
+
+test("explicit task policy records an actual standalone wire reply while retaining original task identity", async () => {
+  for (const detached of [false, true]) {
+    const f = setup(); f.input.approved = { ...f.input.approved, taskReplyPolicy: "standalone-if-exact-missing" };
+    f.input.transport.readExact = async () => detached ? { ...f.readback, replyToMessageId: null, taskReplyOriginMessageId: 789 } : f.readback;
+    assert.deepEqual(await runPilotReply(f.input), { state: "verified", code: "verified" });
+    assert.equal(f.sends(), 1); assert.ok(f.records.every(record => record.replyToMessageId === 789));
+    assert.equal(Object.hasOwn(f.records[0]!, "wireReplyToMessageId"), false); assert.equal(Object.hasOwn(f.records[1]!, "wireReplyToMessageId"), false);
+    assert.equal(Object.hasOwn(f.records[2]!, "wireReplyToMessageId"), detached);
+    if (detached) assert.equal(f.records[2]!.wireReplyToMessageId, null);
+    assert.equal(f.records[2]!.idempotencyKey, f.records[0]!.idempotencyKey);
+  }
+});
+
+test("standalone task metadata never weakens default foreground or mismatched readback checks", async () => {
+  for (const mode of ["default", "missing-origin", "wrong-origin", "anchored-origin", "wrong-text", "wrong-account", "invalid-origin"] as const) {
+    const f = setup();
+    if (mode !== "default") f.input.approved = { ...f.input.approved, taskReplyPolicy: "standalone-if-exact-missing" };
+    const received: PilotReadback = { ...f.readback, replyToMessageId: null, taskReplyOriginMessageId: 789 };
+    if (mode === "missing-origin") delete (received as { taskReplyOriginMessageId?: number }).taskReplyOriginMessageId;
+    f.input.transport.readExact = async () => ({ ...received,
+      ...(mode === "wrong-origin" ? { taskReplyOriginMessageId: 790 } : {}), ...(mode === "anchored-origin" ? { replyToMessageId: 789 } : {}),
+      ...(mode === "wrong-text" ? { text: "different" } : {}), ...(mode === "wrong-account" ? { accountId: "457" } : {}), ...(mode === "invalid-origin" ? { taskReplyOriginMessageId: 0 } : {}) });
+    assert.equal((await runPilotReply(f.input)).state, "unknown", mode);
+    assert.ok(f.records.every(record => !Object.hasOwn(record, "wireReplyToMessageId")));
+    assert.equal((await runPilotReply(f.input)).code, "store-refused"); assert.equal(f.sends(), 1);
+  }
+  for (const policy of [undefined, "always", null]) {
+    const f = setup(); f.input.approved = { ...f.input.approved, taskReplyPolicy: policy } as PilotReplyInput["approved"];
+    assert.deepEqual(await runPilotReply(f.input), { state: "refused", code: "input-refused" }); assert.equal(f.sends(), 0);
+  }
+  const greeting = setup(); greeting.input.approved = { ...greeting.input.approved, replyToMessageId: null, taskReplyPolicy: "standalone-if-exact-missing" };
+  greeting.input.reply = { ...greeting.input.reply, replyToMessageId: null };
+  assert.equal((await runPilotReply(greeting.input)).code, "input-refused");
 });
 
 test("formatted reply uses UTF16 emoji spans and hashes text plus normalized entities before send", async () => {
@@ -351,13 +386,32 @@ test("uncertain persistence identifies the exact attempted state without a new s
 });
 
 test("diagnostic validator accepts only the fixed vocabulary without coercion", () => {
-  const valid = ["send", "send-result", "readback", "readback-shape", "readback-mismatch", "pre-dispatch-refused", "persist-sending", "persist-verified", "persist-failed-terminal", "persist-unknown"];
+  const valid = ["send", "send-result", "readback", "readback-shape", "readback-mismatch", "pre-dispatch-refused", "persist-sending", "persist-verified", "persist-failed-terminal", "persist-unknown",
+    "task-preflight", "task-anchor-read", "task-anchor-validation", "task-send-rpc", "task-ack-parse"];
   for (const value of valid) assert.equal(isPilotDeliveryDiagnostic(value), true);
   let invoked = 0;
   for (const value of [undefined, null, 1, {}, [], "", "SEND", "send\n", "private error", { toString() { invoked++; return "send"; } }]) {
     assert.equal(isPilotDeliveryDiagnostic(value), false);
   }
   assert.equal(invoked, 0);
+});
+
+test("task send diagnostics preserve UNKNOWN and do not inspect arbitrary error properties", async () => {
+  for (const diagnostic of ["task-preflight", "task-anchor-read", "task-anchor-validation", "task-send-rpc", "task-ack-parse"] as const) {
+    const f = setup(); let accessed = 0;
+    const error = Object.freeze(Object.defineProperty({}, "deliveryDiagnostic", { get() { accessed++; throw Error("PRIVATE"); } }));
+    assert.equal(tagPilotTaskSendError(error, diagnostic), error);
+    f.input.transport.sendOnce = async () => { throw error; };
+    assert.deepEqual(await runPilotReply(f.input), { state: "unknown", code: "send-or-readback-unknown", deliveryDiagnostic: diagnostic });
+    assert.equal(accessed, 0); assert.equal(f.records.at(-1)!.state, "unknown");
+    assert.deepEqual(await runPilotReply(f.input), { state: "refused", code: "store-refused" });
+  }
+  const f = setup();
+  f.input.transport.readExact = async () => { throw tagPilotTaskSendError(Error("PRIVATE"), "task-ack-parse"); };
+  assert.equal((await runPilotReply(f.input)).deliveryDiagnostic, "readback", "send metadata cannot override a later failure boundary");
+  const refused = setup();
+  refused.input.transport.sendOnce = async () => { throw tagPilotTaskSendError(new PilotPreDispatchError(), "task-preflight"); };
+  assert.deepEqual(await runPilotReply(refused.input), { state: "failed_terminal", code: "pre-dispatch-refused", deliveryDiagnostic: "pre-dispatch-refused" });
 });
 
 test("typed pre-dispatch refusal is terminal, skips readback and consumes the attempt", async () => {
@@ -496,6 +550,24 @@ test("real file store encrypts and syncs exclusive durable state slots, restart 
   f.input.store = createEncryptedPilotStore(directory, passphrase);
   assert.equal((await runPilotReply(f.input)).state, "refused"); assert.equal(f.sends(), 1);
   assert.deepEqual(await readFile(join(directory, "terminal.enc")), before);
+});
+
+test("encrypted standalone terminal records null wire anchor only after verification and remains consumed on reopen", async t => {
+  const parent = await privateDirectory(t), directory = join(parent, "standalone"), f = setup();
+  f.input.approved = { ...f.input.approved, taskReplyPolicy: "standalone-if-exact-missing" };
+  f.input.store = createEncryptedPilotStore(directory, passphrase);
+  f.input.transport.readExact = async () => ({ ...f.readback, replyToMessageId: null, taskReplyOriginMessageId: 789 });
+  assert.equal((await runPilotReply(f.input)).state, "verified");
+  const planned = await decrypt(join(directory, "planned.enc")), terminal = await decrypt(join(directory, "terminal.enc"));
+  assert.equal(terminal.replyToMessageId, 789); assert.equal(terminal.wireReplyToMessageId, null);
+  assert.equal(terminal.idempotencyKey, planned.idempotencyKey); assert.equal(terminal.randomId, planned.randomId);
+  assert.equal(Object.hasOwn(planned, "wireReplyToMessageId"), false);
+  f.input.store = createEncryptedPilotStore(directory, passphrase); assert.equal((await runPilotReply(f.input)).code, "store-refused"); assert.equal(f.sends(), 1);
+  for (const state of ["planned", "sending", "unknown", "failed_terminal"] as const) {
+    const store = createEncryptedPilotStore(join(parent, state), passphrase);
+    if (state === "planned") await assert.rejects(store.reserve({ ...planned, wireReplyToMessageId: null }));
+    else { await store.reserve(planned); await assert.rejects(store.append({ ...planned, state, wireReplyToMessageId: null })); }
+  }
 });
 
 test("formatted identity is encrypted durably before send and cannot reopen after unknown readback", async t => {

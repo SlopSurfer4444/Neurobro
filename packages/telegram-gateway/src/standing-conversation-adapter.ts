@@ -2,14 +2,14 @@ import { createHash } from "node:crypto";
 import { Api, utils } from "telegram";
 import bigInt from "big-integer";
 import { inputImageIdentity, downloadStandingInputImage, type StandingMediaFileReader } from "./standing-input-image.js";
-import { PilotPreDispatchError, type PilotReadback, type PilotSend, type PilotTransport } from "./pilot-outbox.js";
+import { PilotPreDispatchError, tagPilotTaskSendError, type PilotTaskSendDiagnostic, type PilotReadback, type PilotSend, type PilotTransport } from "./pilot-outbox.js";
 import { resolvePilotPeer, extractPilotSentId, type PilotBinding, type PilotInvoker, type PilotPrimary } from "./pilot-telegram-adapter.js";
-import { STANDING_CONTEXT_CHAIN_LIMIT, STANDING_CONTEXT_WINDOW_LIMIT, type StandingContext, type StandingContextMessage, type StandingContextStatus } from "./standing-context.js";
+import { STANDING_CONTEXT_CHAIN_LIMIT, STANDING_CONTEXT_WINDOW_LIMIT, STANDING_INCOMING_TEXT_BYTES, type StandingContext, type StandingContextMessage, type StandingContextStatus } from "./standing-context.js";
 import { createGeneratedImageTelegramTransport } from "./generated-image-telegram.js";
 import { GeneratedImageTransportError, type GeneratedImageMediaTransport } from "./generated-image-outbox.js";
 import type { ConversationReferences } from "./conversation-references.js";
 import { createSelfHistoryReader, SelfHistoryReaderError, snapshotSelfHistoryTaskCheckpoint, type SelfHistoryTaskCheckpoint, type SelfHistoryTaskPage } from "./self-history-reader.js";
-import { snapshotStandingHistoryTaskIntent, type StandingHistoryTaskIntent } from "./standing-history-task-store.js";
+import { snapshotStandingHistoryTaskIntent, standingHistoryTaskSourcePeerId, type StandingHistoryTaskIntent } from "./standing-history-task-store.js";
 import { createSelfHistoryTool } from "./self-history-tool.js";
 import { createBoundGroupReader, BoundGroupReaderError } from "./bound-group-reader.js";
 import { createBoundGroupTools } from "./bound-group-tools.js";
@@ -21,8 +21,59 @@ import type { EpochExtraTool, EpochToolResult } from "./standing-tool-dispatcher
 import { createStandingArtifactTelegramTransport, ArtifactTransportError, type StandingArtifactTelegramTransport } from "./standing-artifact-telegram.js";
 import { types } from "node:util";
 import { copyTelegramTextEntities, toTelegramEntities, fromTelegramEntities, type TelegramTextEntity } from "./telegram-text-format.js";
+import { createStandingObservedSourcePolicy } from "./standing-observed-source-policy.js";
+import { createStandingChatSearchLease, type StandingChatSearchLease, type StandingChatSearchSource } from "./standing-chat-search.js";
+import { projectStandingObservedSourcePage, type StandingObservedSourceLease } from "./standing-observed-source-reader.js";
 
 export type StandingSelfHistory = ReturnType<typeof createSelfHistoryTool>;
+
+type ObservedSource = Readonly<{ peer: Api.InputPeerChat | Api.InputPeerChannel; peerId: string;
+  info: StandingObservedSourceLease["info"] }>;
+export type StandingObservedSourceStatus = Readonly<{ status:"unavailable";code:"not-found"|"ambiguous"|"incomplete-dialogs"|"invalid-source"|"binding-mismatch"|"binding-unavailable" }>;
+export type StandingObservedSourceConfig = Readonly<{ title:string;expectedPeerId?:string;workspaceId?:string;
+  onResolved?:(info:Readonly<{accountId:string;peerId:string;title:string}>)=>Promise<void> }>;
+class ObservedSourceResolutionError extends Error {
+  constructor(readonly code: StandingObservedSourceStatus["code"]){super("STANDING_OBSERVED_SOURCE_UNAVAILABLE");}
+}
+const sourceFail=(code:StandingObservedSourceStatus["code"]):never=>{throw new ObservedSourceResolutionError(code);};
+function observedSourceConfig(value: unknown): StandingObservedSourceConfig {
+  if (!value || typeof value !== "object" || types.isProxy(value) || ![Object.prototype,null].includes(Object.getPrototypeOf(value))) return fail("binding");
+  const fields=Object.getOwnPropertyDescriptors(value), title=fields.title;
+  if (Reflect.ownKeys(fields).some(key=>typeof key!=="string" || !["title","expectedPeerId","onResolved","workspaceId"].includes(key) || !("value" in fields[key]!) || !fields[key]!.enumerable) || !title || typeof title.value!=="string" ||
+      !title.value.trim() || title.value.trim()!==title.value || Buffer.byteLength(title.value,"utf8")>256 ||
+      /[\u0000-\u001f\u007f-\u009f]/u.test(title.value) || Buffer.from(title.value,"utf8").toString("utf8")!==title.value) return fail("binding");
+  if(fields.workspaceId && (typeof fields.workspaceId.value!=="string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(fields.workspaceId.value)))return fail("binding");
+  if(fields.expectedPeerId && (typeof fields.expectedPeerId.value!=="string" || !/^-[1-9]\d{0,19}$/.test(fields.expectedPeerId.value)) ||
+      fields.onResolved && (typeof fields.onResolved.value!=="function" || types.isProxy(fields.onResolved.value) || types.isGeneratorFunction(fields.onResolved.value)))return fail("binding");
+  return Object.freeze({title:title.value,...(fields.workspaceId?{workspaceId:fields.workspaceId.value}:{}),...(fields.expectedPeerId?{expectedPeerId:fields.expectedPeerId.value}:{}),...(fields.onResolved?{onResolved:fields.onResolved.value}:{})});
+}
+function resolveObservedSource(envelope: unknown, title: string, internalPeerId: string, asOf: number): ObservedSource {
+  if (!(envelope instanceof Api.messages.Dialogs || envelope instanceof Api.messages.DialogsSlice) ||
+      envelope.dialogs.length>100 || envelope.chats.length>100 || envelope.users.length>100 || envelope.messages.length>100) return sourceFail("invalid-source");
+  if(envelope instanceof Api.messages.DialogsSlice && (!Number.isSafeInteger(envelope.count) || envelope.count!==envelope.dialogs.length)) return sourceFail("incomplete-dialogs");
+  const matches=envelope.chats.filter(entity=>"title" in entity && entity.title===title);
+  if(matches.length!==1)return sourceFail(matches.length===0?"not-found":"ambiguous");
+  const entity=matches[0]!;
+  if(!(entity instanceof Api.Chat || entity instanceof Api.Channel))return sourceFail("invalid-source");
+  const peerId=utils.getPeerId(entity);
+  if(!/^-[1-9]\d{0,19}$/.test(peerId) || peerId===internalPeerId || envelope.dialogs.filter(dialog=>dialog instanceof Api.Dialog && samePeer(dialog.peer,peerId)).length!==1 ||
+      envelope.chats.filter(value=>{try{return utils.getPeerId(value)===peerId;}catch{return false;}}).length!==1)return sourceFail("invalid-source");
+  let peer: Api.InputPeerChat | Api.InputPeerChannel;
+  if(entity instanceof Api.Chat) {
+    if(entity.left || entity.deactivated || entity.migratedTo || entity.defaultBannedRights?.viewMessages)return sourceFail("invalid-source");
+    peer=new Api.InputPeerChat({chatId:entity.id});
+  } else {
+    if(entity.left || entity.min || entity.bannedRights?.viewMessages || entity.defaultBannedRights?.viewMessages ||
+        !(entity.broadcast || entity.megagroup || entity.gigagroup) || !entity.accessHash || entity.accessHash.eq(bigInt.zero))return sourceFail("invalid-source");
+    peer=new Api.InputPeerChannel({channelId:entity.id,accessHash:entity.accessHash});
+  }
+  const denial=(rights:Api.ChatBannedRights|undefined)=>rights?.sendMessages===true &&
+    (rights.untilDate===0 || Number.isSafeInteger(rights.untilDate) && rights.untilDate>asOf);
+  const personallyDenied=entity instanceof Api.Channel && denial(entity.bannedRights);
+  const defaultDenied=!entity.creator && !entity.adminRights && denial(entity.defaultBannedRights);
+  return Object.freeze({peer,peerId,info:Object.freeze({sourceRef:"community",title,readOnly:true,
+    telegramSendRestriction:personallyDenied || defaultDenied ? "confirmed-denied" : "not-confirmed"})});
+}
 
 export type StandingAdapterErrorCode = "transport" | "binding" | "protocol" | "backlog" | "checkpoint" | "aborted";
 export class StandingAdapterError extends Error {
@@ -46,20 +97,52 @@ function samePeer(peer: Api.TypePeer | undefined, id: string): boolean {
   try { return peer !== undefined && utils.getPeerId(peer) === id; } catch { return false; }
 }
 function textOnly(message: Api.Message): boolean {
-  return typeof message.message === "string" && message.message.trim().length > 0 && message.message.length <= 4096 &&
-    Buffer.byteLength(message.message, "utf8") <= 4096 && !message.message.includes("\0") &&
+  // Incoming multilingual text has a separate budget. Our own sent-message
+  // shape/readback keeps its original output bound.
+  const maximum = message.out ? 4096 : STANDING_INCOMING_TEXT_BYTES;
+  return typeof message.message === "string" && message.message.trim().length > 0 &&
+    Buffer.byteLength(message.message, "utf8") <= maximum && !message.message.includes("\0") &&
     Buffer.from(message.message, "utf8").toString("utf8") === message.message &&
     !message.fwdFrom && !message.viaBotId && !message.groupedId && !message.replyMarkup &&
     (!message.media || message.media instanceof Api.MessageMediaEmpty || message.media instanceof Api.MessageMediaWebPage);
 }
 function incomingShape(message: Api.Message): boolean {
   return textOnly(message) || (inputImageIdentity(message) !== undefined &&
-    typeof message.message === "string" && Buffer.byteLength(message.message,"utf8") <= 1024 &&
+    typeof message.message === "string" && Buffer.byteLength(message.message,"utf8") <= STANDING_INCOMING_TEXT_BYTES &&
     !message.message.includes("\0") && Buffer.from(message.message,"utf8").toString("utf8") === message.message &&
     !message.fwdFrom && !message.viaBotId && !message.replyMarkup);
 }
+/** Forwarded bodies are context only. Their header never selects a requester,
+ * another peer, or a command trigger; native provenance contains no remote IDs. */
+function forwardedPayload(message: Api.Message): Readonly<{ metadata: NonNullable<StandingContextMessage["forwarded"]>; proof: string }> | undefined {
+  try {
+    const header = message.fwdFrom;
+    if (!(header instanceof Api.MessageFwdHeader) || message.out || message.viaBotId || message.replyMarkup ||
+        !Number.isSafeInteger(header.date) || header.date <= 0 || header.date > 253402300799 ||
+        typeof message.message !== "string" || message.message.includes("\0") || Buffer.from(message.message,"utf8").toString("utf8") !== message.message) return;
+    for (const value of [header.fromName,header.postAuthor,header.savedFromName,header.psaType]) {
+      if (value != null && (typeof value !== "string" || Buffer.byteLength(value,"utf8") > 4096 ||
+          value.includes("\0") || Buffer.from(value,"utf8").toString("utf8") !== value)) return;
+    }
+    const image = inputImageIdentity(message) !== undefined;
+    if (image ? Buffer.byteLength(message.message,"utf8") > STANDING_INCOMING_TEXT_BYTES :
+        !message.message.trim() || Buffer.byteLength(message.message,"utf8") > STANDING_INCOMING_TEXT_BYTES || message.groupedId ||
+        message.media && !(message.media instanceof Api.MessageMediaEmpty || message.media instanceof Api.MessageMediaWebPage)) return;
+    const bytes = header.getBytes();
+    if (bytes.length > 32768) return;
+    const name = (header.fromName ?? header.postAuthor ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu," ").trim();
+    let sourceName = "";
+    for (const point of name) { if (Buffer.byteLength(sourceName + point,"utf8") > 128) break; sourceName += point; }
+    return Object.freeze({ metadata: Object.freeze({ originalDate: header.date, sourceName: sourceName.trim() || null }),
+      proof: createHash("sha256").update(bytes).digest("hex") });
+  } catch { return; }
+}
+// Host-only comparison retains the full header identity without exposing IDs.
+const forwardedContextProofs = new WeakMap<StandingContextMessage,string>();
 function primaryText(message: Api.Message): string {
-  return (message.message.trim() ? message.message : "[Фото пользователя]") + (message.groupedId ? "\n[Элемент альбома; содержимое доступно только в приложенных изображениях, весь состав не подтверждён]" : "");
+  const body = message.message.trim() ? message.message : "[Фото пользователя]";
+  const marker = message.groupedId ? "\n[Элемент альбома; содержимое доступно только в приложенных изображениях, весь состав не подтверждён]" : "";
+  return Buffer.byteLength(body + marker, "utf8") <= STANDING_INCOMING_TEXT_BYTES ? body + marker : body;
 }
 /** Same plain photo shape accepted by generated-image-telegram readback. This
  * proves an own photo identity and caption, never pixel contents or generation. */
@@ -105,6 +188,8 @@ export type StandingSelection = Readonly<{ primary: PilotPrimary; transport: Pil
   readInputImages?(): Promise<Readonly<{images: readonly Readonly<{messageId:number; mimeType:"image/jpeg"|"image/png"; bytes:Buffer}>[]; sources?:readonly StandingContextMessage[]; unavailable?:true}>>;
   /** The primary is an observed human anchor, not an addressed request. */
   initiative?: true; finishInitiative?(): Promise<void>;
+  /** Passive participation may expire while the model works. No network I/O. */
+  isParticipationCurrent?(): boolean;
   /** Next unthreaded human contribution after fresh own output. Intent remains
    * for the model to assess; silence is allowed without disabling this route. */
   continuation?: true;
@@ -116,15 +201,35 @@ export type StandingSelection = Readonly<{ primary: PilotPrimary; transport: Pil
   /** Source-owned operation lease during this model turn; close joins real I/O
    * before history, another artifact, or the final reply can proceed. */
   openArtifactTransport?(): StandingArtifactTransportLease;
+  /** Read-only source lease; never provides an interactive source destination. */
+  openObservedSource?(): StandingObservedSourceLease;
+  /** Universal read-only search, bound to this selection and configured peers. */
+  openChatSearch?(source: StandingChatSearchSource): StandingChatSearchLease;
+  observedSourceStatus?: StandingObservedSourceStatus;
   openActions?(resolveAvatar?: (artifactRef: string) => StandingSelfProfileImage): BoundActionLease }>;
 export type StandingArtifactTransportLease = Readonly<{ transport: StandingArtifactTelegramTransport; close(): Promise<void> }>;
 export type StandingIdleHistoryLease = Readonly<{ readTaskPage(): Promise<SelfHistoryTaskPage>; close(): Promise<void> }>;
 export type StandingTaskReplyLease = Readonly<{ transport: PilotTransport; close(): Promise<void> }>;
+/** Host-only, plain text delivery to the fixed internal group. No reply anchor
+ * or destination can be supplied by the caller. Durable at-most-once admission
+ * belongs to the alert outbox; this lease permits one send and one readback. */
+export type StandingCommunityAlertLease = Readonly<{
+  info: Readonly<{ accountId: string; internalPeerId: string }>;
+  sendOnce(input: Readonly<{ text: string; randomId: string }>): Promise<Readonly<{ messageId: number }>>;
+  readExact(messageId: number): Promise<Readonly<{ messageId: number; chatId: string; accountId: string; text: string; replyToMessageId: null; out: true; fromId: string; media: false; post: false }>>;
+  close(): Promise<void>;
+}>;
 export type StandingIdleHistoryTicket = Readonly<{
+  openObservedHistoryTask?(input: Readonly<{ intent: StandingHistoryTaskIntent; checkpoint?: SelfHistoryTaskCheckpoint; signal: AbortSignal }>): StandingIdleHistoryLease;
+  openObservedSource?(input: Readonly<{ signal: AbortSignal }>): StandingObservedSourceLease;
+  openCommunityAlert?(input: Readonly<{ signal: AbortSignal }>): StandingCommunityAlertLease;
   openHistoryTask(input: Readonly<{ intent: StandingHistoryTaskIntent; checkpoint?: SelfHistoryTaskCheckpoint; signal: AbortSignal }>): StandingIdleHistoryLease;
   /** Host admits the authenticated task's final reply separately from analysis
    * readiness. This consumes the same ticket and never selects a foreground turn. */
-  openTaskReply(input: Readonly<{ intent: StandingHistoryTaskIntent; signal: AbortSignal }>): StandingTaskReplyLease;
+  /** Host-only policy for an already authenticated durable task. Foreground
+   * selections never receive permission to detach from their primary. */
+  openTaskReply(input: Readonly<{ intent: StandingHistoryTaskIntent; signal: AbortSignal;
+    taskReplyPolicy?: "standalone-if-exact-missing" }>): StandingTaskReplyLease;
 }>;
 export type StandingPollNext = Readonly<{ kind: "selected"; selection: StandingSelection } | { kind: "more" } | { kind: "idle"; ticket: StandingIdleHistoryTicket }>;
 export type StandingPollWork = StandingPollNext | Readonly<{ kind: "background"; ticket: StandingIdleHistoryTicket }>;
@@ -205,15 +310,20 @@ function projectContext(message: Api.TypeMessage | undefined, users: Api.TypeUse
       !(message.fromId instanceof Api.PeerUser) || message.post || !Number.isSafeInteger(message.date) || message.date <= 0) return;
   const authorId = message.fromId.userId.toString(), self = authorId === binding.accountId;
   if (!validUser(authorId) || !!message.out !== self) return;
-  const photoId = self ? selfPhotoId(message,binding) : incomingShape(message) ? inputImageIdentity(message) : undefined;
+  const forwarded = message.fwdFrom ? forwardedPayload(message) : undefined;
+  if (message.fwdFrom && !forwarded) return;
+  const photoId = self ? selfPhotoId(message,binding) : incomingShape(message) || forwarded ? inputImageIdentity(message) : undefined;
   const media = photoId === undefined ? projectStandingMediaContext(message, binding) : undefined;
-  if (!textOnly(message) && photoId === undefined && !media) return;
+  if (!textOnly(message) && photoId === undefined && !media && !forwarded) return;
   const authors = users.filter(user => user.id.toString() === authorId);
   if (authors.length > 1 || (!self && (authors.length !== 1 || !(authors[0] instanceof Api.User) || authors[0].bot || authors[0].deleted || authors[0].self))) return;
   const user = authors[0] instanceof Api.User ? authors[0] : undefined;
-  return Object.freeze({ chatId: binding.peerId, messageId: message.id, authorId, author: self ? "self" : "user",
+  const projected = Object.freeze({ chatId: binding.peerId, messageId: message.id, authorId, author: self ? "self" as const : "user" as const,
     displayName: displayName(user, self), date: message.date, replyToMessageId: contextLink(message, binding.peerId).id,
+    ...(forwarded ? { forwarded: forwarded.metadata } : {}),
     text: media?.text ?? (photoId === undefined ? message.message : (self ? PHOTO_CONTEXT_MARKER : primaryText(message)) + (self && message.message.length ? "\n" + message.message : "")) });
+  if (forwarded) forwardedContextProofs.set(projected,forwarded.proof);
+  return projected;
 }
 function selfAnchorProof(value: Api.TypeMessage | undefined, binding: PilotBinding): string | undefined {
   if (!(value instanceof Api.Message) || !samePeer(value.peerId, binding.peerId) || !(value.fromId instanceof Api.PeerUser) ||
@@ -237,8 +347,11 @@ function selfAnchorProof(value: Api.TypeMessage | undefined, binding: PilotBindi
 }
 function replyAnchorProof(value:Api.TypeMessage|undefined,users:Api.TypeUser[],binding:PilotBinding):string|undefined {
   const own=selfAnchorProof(value,binding);if(own!==undefined)return own;
-  if(!(value instanceof Api.Message)||value.out||!incomingShape(value)||inputImageIdentity(value)===undefined||value.fromScheduled)return;
+  if(!(value instanceof Api.Message)||value.out||value.fromScheduled)return;
+  const forwarded = forwardedPayload(value);
+  if (!forwarded && (!incomingShape(value)||inputImageIdentity(value)===undefined)) return;
   const context=projectContext(value,users,binding);if(!context||context.author!=="user")return;
+  if (forwarded) return digest(["participant-forward",context,inputImageIdentity(value)??null,forwarded.proof,value.editDate??null]);
   return digest(["participant-photo",context,inputImageIdentity(value),value.editDate??null]);
 }
 async function waitDefault(ms: number, signal: AbortSignal): Promise<void> {
@@ -253,9 +366,13 @@ async function waitDefault(ms: number, signal: AbortSignal): Promise<void> {
 /** Sole-client sequential adapter. Runner owns reconnect/teardown, encrypted cursor
  * binding, durable outbox, model input projection and stopping unknown outcomes.
  * Fresh startup checkpoints the latest ID without processing that baseline body.
- * Resume scans all later IDs; startedAt is not reapplied to downtime messages.
+ * Resume scans all later IDs, but admits only requests within the conversational
+ * relevance window before startup. Old backlog is consumed without new replies;
+ * separately persisted long-running tasks are not controlled by this cursor.
  * Queue contains only IDs/proofs/trigger metadata, never surrounding message text.
- * At most three pages/300 messages and 100 candidates per catch-up. A continuation
+ * At most three pages/300 messages and 100 candidates per catch-up. An expired
+ * dated boundary ends the descending-date history scan without reading its tail.
+ * A continuation
  * probe proves exhaustion; excess backlog stops without advancing the durable cursor.
  * MTProto cannot expose deleted/unavailable messages: continuity concerns returned
  * available history, not a claim of recovering deleted or hidden traffic. */
@@ -278,6 +395,8 @@ export async function createStandingConversationAdapter(input: {
   enableGroupTools?: boolean;
   enableArtifacts?: boolean;
   enableBoundActions?: boolean;
+  /** Exact host-configured source title, resolved once from existing dialogs. */
+  observedSource?: StandingObservedSourceConfig;
   clock?: () => number; wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   initiative?: Readonly<{ enabled(): boolean; minimumIntervalMs?: number; debounceMs?: number }>;
 }): Promise<Readonly<{ next(signal: AbortSignal): Promise<StandingSelection>; pollNext(signal: AbortSignal): Promise<StandingPollNext>;
@@ -286,6 +405,7 @@ export async function createStandingConversationAdapter(input: {
   const binding = Object.freeze({ ...input.binding });
   const startedAt = input.startedAt;
   const resume = input.resumeCursor;
+  const observedConfig = input.observedSource === undefined ? undefined : observedSourceConfig(input.observedSource);
   const checkpoint = input.checkpointCursor;
   const observeSource = input.sourceObserver?.observe.bind(input.sourceObserver);
   const now = input.clock ?? (() => performance.now());
@@ -316,9 +436,15 @@ export async function createStandingConversationAdapter(input: {
   let continuation: { candidate: Candidate; anchor: ContinuationAnchor } | undefined;
   let previousOwn: ContinuationAnchor | undefined;
   let conversationObserved = false, observedThrough = resume ?? 0;
+  // The durable cursor preserves recent direct requests through downtime, but
+  // is not permission to join an old conversation. Use the same relevance window
+  // for passive participation and continuation, including after model latency.
+  const freshConversationDate = (date: number) => {
+    const age = startedAt + (now() - openedAt) / 1000 - date;
+    return Number.isFinite(age) && age >= -30 && age <= 180;
+  };
   const anchorFresh = (anchor: ContinuationAnchor, candidate?: Candidate) => {
-    const age = startedAt + (now() - openedAt) / 1000 - anchor.message.date;
-    return Number.isFinite(age) && age >= -30 && age <= 180 && (!candidate ||
+    return freshConversationDate(anchor.message.date) && (!candidate ||
       candidate.id > anchor.message.messageId && candidate.date >= anchor.message.date && candidate.date - anchor.message.date <= 180);
   };
   const observeOwn = (anchor: ContinuationAnchor) => {
@@ -332,7 +458,7 @@ export async function createStandingConversationAdapter(input: {
   const consumedAlbum=(candidate:Candidate)=>candidate.albumKey!==undefined && candidate.albumContinuation===true && consumedAlbums.has(candidate.albumKey);
   const initiativeDue = () => initiativeEnabled?.() === true && Number.isFinite(now()) && now() >= initiativeAfter;
   const rememberPassive = (candidate: Candidate) => {
-    if (!initiativeDue() || candidate.id <= cursor || consumedAlbum(candidate)) return;
+    if (!initiativeDue() || !freshConversationDate(candidate.date) || candidate.id <= cursor || consumedAlbum(candidate)) return;
     const at = now();
     if (!passive) passive = { candidate, openedAt: at, changedAt: at };
     else if(candidate.albumKey!==undefined && candidate.albumKey===passive.candidate.albumKey) {
@@ -354,6 +480,10 @@ export async function createStandingConversationAdapter(input: {
   const actionsEnabled = input.enableBoundActions === true;
   let activeActions: BoundActionLease | undefined;
   const actionClosings = new Set<Promise<void>>();
+  let activeObservedSource: StandingObservedSourceLease | undefined;
+  let activeChatSearch: StandingChatSearchLease | undefined;
+  const chatSearchClosings = new Set<Promise<void>>();
+  const observedSourceClosings = new Set<Promise<void>>();
   let activeArtifactLease: StandingArtifactTransportLease | undefined;
   const artifactClosings = new Set<Promise<void>>();
   let extraTools: readonly EpochExtraTool[] | undefined, groupTools: ReturnType<typeof createBoundGroupTools> | undefined;
@@ -365,6 +495,8 @@ export async function createStandingConversationAdapter(input: {
   const idleHistoryClosings = new Set<Promise<void>>();
   let activeTaskReply: StandingTaskReplyLease | undefined;
   const taskReplyClosings = new Set<Promise<void>>();
+  let activeCommunityAlert: StandingCommunityAlertLease | undefined;
+  const communityAlertClosings = new Set<Promise<void>>();
   let ownPhotoAnchorPending: Promise<unknown> | undefined;
   let inputImagesPending: Promise<unknown> | undefined;
   let typingSettlement: Promise<void> | undefined;
@@ -384,10 +516,13 @@ export async function createStandingConversationAdapter(input: {
     if (groupTools && !groupClosing) { groupClosing = groupTools.close(); void groupClosing.catch(() => {}); }
     if (activeArtifactLease) void activeArtifactLease.close();
     if (activeActions) void activeActions.close();
+    if (activeObservedSource) void activeObservedSource.close();
+    if (activeChatSearch) void activeChatSearch.close();
     if (activeIdleHistory) void activeIdleHistory.close();
-    if (activeTaskReply) void activeTaskReply.close(); };
+    if (activeTaskReply) void activeTaskReply.close();
+    if (activeCommunityAlert) void activeCommunityAlert.close(); };
   const closeCapabilities = async () => { close(); await Promise.all([groupClosing, groupPending,
-    ownPhotoAnchorPending?.then(() => {}, () => {}), inputImagesPending?.then(() => {}, () => {}), ...artifactClosings, ...actionClosings, ...idleHistoryClosings, ...taskReplyClosings]); };
+    ownPhotoAnchorPending?.then(() => {}, () => {}), inputImagesPending?.then(() => {}, () => {}), ...artifactClosings, ...actionClosings, ...observedSourceClosings, ...chatSearchClosings, ...idleHistoryClosings, ...taskReplyClosings, ...communityAlertClosings]); };
   const check = (signal: AbortSignal) => { if (closed || input.signal.aborted || signal.aborted) { close(); return fail("aborted"); } };
   async function observe(envelope: unknown, signal: AbortSignal): Promise<void> {
     if (!observeSource) return;
@@ -420,8 +555,27 @@ export async function createStandingConversationAdapter(input: {
   for (const name of [input.self.username, ...(input.self.usernames ?? []).filter(value => value.active).map(value => value.username)]) {
     if (typeof name === "string" && /^[A-Za-z0-9_]{5,32}$/.test(name)) usernames.add(name.toLowerCase());
   }
+  let observedSource:ObservedSource|undefined,observedSourceStatus:StandingObservedSourceStatus|undefined;
   const peer = await request(new Api.messages.GetDialogs({ offsetDate: 0, offsetId: 0, offsetPeer: new Api.InputPeerEmpty(), limit: 100, hash: bigInt.zero }), input.signal,
-    envelope => { try { return resolvePilotPeer(binding, input.self, envelope); } catch { return fail("binding"); } });
+    envelope => {
+      let internal:Api.InputPeerChat|Api.InputPeerChannel;
+      try{internal=resolvePilotPeer(binding,input.self,envelope);}catch{return fail("binding");}
+      if(observedConfig) {
+        try {
+          const elapsed=now()-openedAt;
+          if(!Number.isFinite(elapsed) || elapsed<0)return sourceFail("invalid-source");
+          const source=resolveObservedSource(envelope,observedConfig.title,binding.peerId,startedAt+elapsed/1000);
+          if(observedConfig.expectedPeerId!==undefined && observedConfig.expectedPeerId!==source.peerId)return sourceFail("binding-mismatch");
+          observedSource=source;
+        } catch(error){observedSourceStatus=Object.freeze({status:"unavailable",code:error instanceof ObservedSourceResolutionError?error.code:"invalid-source"});}
+      }
+      return internal;
+    });
+  if(observedSource && observedConfig?.onResolved) {
+    try {await observedConfig.onResolved(Object.freeze({accountId:binding.accountId,peerId:observedSource.peerId,title:observedSource.info.title}));}
+    catch {observedSource=undefined;observedSourceStatus=Object.freeze({status:"unavailable",code:"binding-unavailable"});}
+    check(input.signal);
+  }
   const getMessage = (id: number): Api.AnyRequest => peer instanceof Api.InputPeerChannel
     ? new Api.channels.GetMessages({ channel: new Api.InputChannel({ channelId: peer.channelId, accessHash: peer.accessHash }), id: [new Api.InputMessageID({ id })] })
     : new Api.messages.GetMessages({ id: [new Api.InputMessageID({ id })] });
@@ -535,6 +689,8 @@ export async function createStandingConversationAdapter(input: {
   async function collect(signal: AbortSignal): Promise<void> {
     let offset = 0;
     let top = cursor;
+    let previousDate = Number.POSITIVE_INFINITY;
+    const admissionFloor = startedAt - (resume !== undefined ? 180 : 0);
     const pending: Candidate[] = [];
     const ordinaryCandidates: Candidate[] = [];
     type ConversationObservation = { id: number; own?: ContinuationAnchor; human: boolean; candidate?: Candidate };
@@ -558,23 +714,35 @@ export async function createStandingConversationAdapter(input: {
       const result = await history(limit, offset, cursor, signal, batch => {
         let previous = offset || 2_147_483_648;
         const candidates: Candidate[] = [];
+        let expired = false;
         for (const message of batch.messages) {
           const id = historyId(message, binding.peerId);
           if (id <= cursor || id >= previous) return fail(); previous = id;
           if (top === cursor) top = id;
+          // messages.getHistory is ordered by descending date. A validated
+          // expired boundary proves the remaining tail cannot become a new
+          // request; do not scan thousands of old messages merely to skip them.
+          // Missing dates are not evidence for this shortcut.
+          if ((message instanceof Api.Message || message instanceof Api.MessageService) && Number.isSafeInteger(message.date) && message.date > 0) {
+            if (message.date > previousDate) return fail();
+            previousDate = message.date;
+            if (message.date < admissionFloor) { expired = true; break; }
+          }
           const candidate = project(message, batch.users, binding, usernames, true);
           if (id > observedThrough) observations.push({ ...observation(message, batch.users),
-            ...(candidate && (resume !== undefined || candidate.date >= startedAt) ? { candidate } : {}) });
-          if (candidate && !consumedAlbum(candidate) && (resume !== undefined || candidate.date >= startedAt)) {
+            ...(candidate && candidate.date >= admissionFloor ? { candidate } : {}) });
+          if (candidate && !consumedAlbum(candidate) && candidate.date >= admissionFloor) {
             if (candidate.trigger === "ordinary" || candidate.trigger === "reply" && humanReplyProofs.get(candidate.id) === candidate.proof) {
               if (initiativeDue()) ordinaryCandidates.push(candidate);
             }
             else candidates.push(candidate);
           }
         }
-        return { length: batch.messages.length, oldest: previous, candidates };
+        return { length: batch.messages.length, oldest: previous, candidates, expired };
       });
-      if (!result.length) {
+      pending.push(...result.candidates);
+      if (pending.length > 100) return overload();
+      if (!result.length || result.expired) {
         for (const value of observations.reverse()) {
           if (value.id <= observedThrough) continue;
           // After reconnect, recover only the immediately preceding own turn
@@ -605,7 +773,7 @@ export async function createStandingConversationAdapter(input: {
         return;
       }
       if (page === 3) return overload();
-      total += result.length; pending.push(...result.candidates);
+      total += result.length;
       if (total > 300 || pending.length > 100) return overload();
       offset = result.oldest;
     }
@@ -628,7 +796,7 @@ export async function createStandingConversationAdapter(input: {
         const knownMedia = raw.media === undefined || raw.media instanceof Api.MessageMediaEmpty || raw.media instanceof Api.MessageMediaWebPage ||
           raw.media instanceof Api.MessageMediaPhoto || raw.media instanceof Api.MessageMediaDocument;
         if (authors.length === 1 && authors[0] instanceof Api.User && !authors[0].bot && !authors[0].deleted && !authors[0].self && knownMedia &&
-            typeof raw.message === "string" && !raw.message.includes("\0") && Buffer.byteLength(raw.message, "utf8") <= 4096 &&
+            typeof raw.message === "string" && !raw.message.includes("\0") && Buffer.byteLength(raw.message, "utf8") <= STANDING_INCOMING_TEXT_BYTES &&
             Buffer.from(raw.message, "utf8").toString("utf8") === raw.message) return;
       }
       if (!value) return fail();
@@ -640,14 +808,14 @@ export async function createStandingConversationAdapter(input: {
         contextPrimary, link: contextLink(message, binding.peerId), scheduled: message.fromScheduled === true, hasImage:inputImageIdentity(message)!==undefined };
     });
   }
-  async function anchorProof(id: number, signal: AbortSignal, captureIdentity?: (identity: AnchorIdentity) => void): Promise<string | undefined> {
+  async function anchorProof(id: number, signal: AbortSignal, captureIdentity?: (identity: AnchorIdentity) => void, requireSelf = false): Promise<string | undefined> {
     return request(getMessage(id), signal, envelope => {
       const batch = batchOf(envelope, 1);
       if (batch.messages.length !== 1) return;
       const value = batch.messages[0];
       if (value instanceof Api.MessageEmpty && value.id === id) return;
       if (!(value instanceof Api.Message) || value.id !== id || !samePeer(value.peerId, binding.peerId)) return fail();
-      const proof = replyAnchorProof(value, batch.users, binding);
+      const proof = requireSelf ? selfAnchorProof(value, binding) : replyAnchorProof(value, batch.users, binding);
       if (proof !== undefined && value.fromId instanceof Api.PeerUser) captureIdentity?.({ ownerId: value.fromId.userId.toString(), date: value.date });
       return proof;
     });
@@ -656,7 +824,8 @@ export async function createStandingConversationAdapter(input: {
    * Reads are strictly bounded and cannot follow a foreign peer. Missing context
    * is exposed to the consumer; it is never converted into fabricated history. */
   async function contextFor(primary: StandingContextMessage, firstLink: ContextLink, expectedDirectProof: string | undefined, signal: AbortSignal,
-      captureOwnPhoto?: (anchor: Readonly<{ id: number; proof: string }>) => void, expectedDirectIdentity?: AnchorIdentity): Promise<StandingContext | undefined> {
+      captureOwnPhoto?: (anchor: Readonly<{ id: number; proof: string }>) => void, expectedDirectIdentity?: AnchorIdentity,
+      captureDirectAnchor?: (anchor: Readonly<{ id: number; proof: string }>) => void): Promise<StandingContext | undefined> {
     // Admission budget only: never detach an in-flight same-client request. The
     // caller's existing invoke deadline bounds that final request's settlement.
     const began = now();
@@ -665,6 +834,12 @@ export async function createStandingConversationAdapter(input: {
     let chainStatus: StandingContextStatus = firstLink.status === "bound" ? "complete" : firstLink.status;
     let recentStatus: StandingContext["recentStatus"] = "unavailable";
     let recent: StandingContextMessage[] = [];
+    // Reserve the whole primary before optional context; JSON escaping and
+    // metadata count toward the unchanged journal/context envelope budget.
+    const fits = (chain: readonly StandingContextMessage[], window: readonly StandingContextMessage[]) =>
+      Buffer.byteLength(JSON.stringify({ version: "standing-context-v1", primary, replyChain: chain, recent: window,
+        chainStatus: "unavailable", recentStatus: "unavailable" }), "utf8") <= 65536;
+    if (!fits([], [])) return fail();
     let next = firstLink.id;
     let failedRead = false;
     async function optional<T>(value: Api.AnyRequest, parse: (batch: Batch) => T, limit: number): Promise<{ value: T } | undefined> {
@@ -702,6 +877,10 @@ export async function createStandingConversationAdapter(input: {
       }
       const value = result.value;
       if (!value.message || !value.link) { chainStatus = value.status; break; }
+      // Bind the source we actually show even when PROMPT/mention won trigger
+      // priority. Reuse this read; the requesting participant stays unchanged.
+      if (depth === 0 && value.proof !== undefined) captureDirectAnchor?.(Object.freeze({ id, proof: value.proof }));
+      if (!fits([...replyChain, value.message], [])) { chainStatus = "truncated"; break; }
       replyChain.push(value.message); next = value.link.id;
       chainStatus = value.link.status === "bound" ? "complete" : value.link.status;
       if (next !== null && replyChain.length === STANDING_CONTEXT_CHAIN_LIMIT) chainStatus = "truncated";
@@ -725,12 +904,18 @@ export async function createStandingConversationAdapter(input: {
         }
         return { messages: messages.reverse(), status: batch.messages.length === STANDING_CONTEXT_WINDOW_LIMIT ? "truncated" as const : partial ? "partial" as const : "complete" as const };
       }, STANDING_CONTEXT_WINDOW_LIMIT);
-      if (window) { recent = window.value.messages; recentStatus = window.value.status; }
+      if (window) {
+        recentStatus = window.value.status;
+        for (const message of [...window.value.messages].reverse()) {
+          if (!fits(replyChain, [message, ...recent])) { recentStatus = "truncated"; break; }
+          recent.unshift(message);
+        }
+      }
     }
     return Object.freeze({ version: "standing-context-v1", primary, replyChain: Object.freeze(replyChain), recent: Object.freeze(recent), chainStatus, recentStatus });
   }
-  function transportsFor(candidate: Candidate, primary: PilotPrimary, expectedAnchorProof: string | undefined, selectionSignal: AbortSignal,
-      photoAnchor: Readonly<{ id: number; proof: string }> | undefined, initiative = false, context?:StandingContext, continuationAnchor?: ContinuationAnchor): Pick<StandingSelection, "transport" | "imageTransport" | "openArtifactTransport" | "openActions" | "readOwnPhotoAnchor" | "readInputImages" | "finishInitiative"> {
+  function transportsFor(candidate: Candidate, primary: PilotPrimary, replyAnchor: Readonly<{ id: number; proof: string }> | undefined, selectionSignal: AbortSignal,
+      photoAnchor: Readonly<{ id: number; proof: string }> | undefined, initiative = false, context?:StandingContext, continuationAnchor?: ContinuationAnchor): Pick<StandingSelection, "transport" | "imageTransport" | "openArtifactTransport" | "openActions" | "openObservedSource" | "openChatSearch" | "readOwnPhotoAnchor" | "readInputImages" | "finishInitiative" | "isParticipationCurrent"> {
     const selection = Symbol("standing-selection"); activeSelection = selection;
     historySelectionSignal = selectionSignal;
     let route: "text" | "image" | undefined;
@@ -738,7 +923,9 @@ export async function createStandingConversationAdapter(input: {
     let sentEntities: readonly TelegramTextEntity[] | undefined;
     const current = () => !closed && !input.signal.aborted && !selectionSignal.aborted && active && activeSelection === selection;
     const finish = () => { active = false; activeSelection = undefined; historySelectionSignal = undefined; };
-    const passiveFinish = initiative || continuationAnchor ? { async finishInitiative() {
+    const participationEligible = () => (!initiative || initiativeEnabled?.() === true && freshConversationDate(candidate.date)) &&
+      (!continuationAnchor || anchorFresh(continuationAnchor, candidate));
+    const passiveFinish = initiative || continuationAnchor ? { isParticipationCurrent: () => current() && participationEligible(), async finishInitiative() {
       await typingSettlement;
       if (activeSelection !== selection || !active || route !== undefined || historyBusy || activeActions || activeArtifactLease || groupPending) return fail();
       typingSelection = undefined; finish();
@@ -750,11 +937,11 @@ export async function createStandingConversationAdapter(input: {
       if (typingSelection === candidate.id) typingSelection = undefined;
     }
     async function revalidate(signal: AbortSignal): Promise<PilotPrimary> {
-      check(signal); if (!current() || initiative && initiativeEnabled?.() !== true) return fail();
+      check(signal); if (!current() || !participationEligible()) return fail();
       const read = await readCandidate(candidate, signal);
-      if (!initiative && candidate.trigger === "reply" && await anchorProof(candidate.replyId!, signal) !== expectedAnchorProof) return fail();
+      if (replyAnchor && await anchorProof(replyAnchor.id, signal) !== replyAnchor.proof) return fail();
       if (continuationAnchor && await anchorProof(continuationAnchor.message.messageId, signal) !== continuationAnchor.proof) return fail();
-      check(signal); if (!current() || initiative && initiativeEnabled?.() !== true) return fail();
+      check(signal); if (!current() || !participationEligible()) return fail();
       return read.primary;
     }
     let inputPhotosConsumed=false;
@@ -769,6 +956,7 @@ export async function createStandingConversationAdapter(input: {
           await revalidate(selectionSignal);
           const ids = [candidate.id];
           let sibling:Readonly<{candidate:Candidate;context:StandingContextMessage}>|undefined;
+          let forwardedAncestor: Readonly<{id:number;context:StandingContextMessage}> | undefined;
           if(candidate.albumKey!==undefined) {
             const upper=Math.min(2147483647,candidate.id+21),lower=Math.max(0,candidate.id-21);
             sibling=await history(41,upper,lower,selectionSignal,batch=>{
@@ -799,15 +987,19 @@ export async function createStandingConversationAdapter(input: {
                 const batch=batchOf(envelope,1),value=batch.messages[0];
                 if(batch.messages.length!==1 || !(value instanceof Api.Message) || value.id!==snapshot.messageId || value.fromScheduled)return;
                 const projected=projectContext(value,batch.users,binding);
-                if(!projected || digest(projected)!==digest(snapshot))return;
+                if(!projected || digest(projected)!==digest(snapshot) || forwardedContextProofs.get(projected)!==forwardedContextProofs.get(snapshot))return;
                 const identity=inputImageIdentity(value),link=contextLink(value,binding.peerId);
-                return {context:projected,identity,link,proof:digest([projected,identity??null,value.editDate??null]),
+                return {context:projected,identity,link,proof:digest([projected,identity??null,value.editDate??null,forwardedContextProofs.get(projected)??null]),
                   candidate:project(value,batch.users,binding,usernames,true)};
               });
               if(!observed)break;
               continuity.push({id:snapshot.messageId,proof:observed.proof});
               // A direct image remains handled by the original direct-target path.
               if(depth===0 && observed.identity!==undefined)break;
+              if(depth>0 && observed.context.forwarded && observed.identity!==undefined) {
+                forwardedAncestor={id:snapshot.messageId,context:observed.context};
+                ids.splice(1,ids.length-1,snapshot.messageId);break;
+              }
               if(depth>0 && observed.context.author==="user" && observed.identity!==undefined && observed.candidate) {
                 sibling={candidate:observed.candidate,context:observed.context};
                 ids.splice(1,ids.length-1,observed.candidate.id);break;
@@ -819,8 +1011,13 @@ export async function createStandingConversationAdapter(input: {
             check(selectionSignal); if (!current() || route !== undefined) return fail();
             const source = await request(getMessage(id),selectionSignal,envelope => {
               const batch=batchOf(envelope,1), value=batch.messages[0];
-              if (batch.messages.length!==1 || !(value instanceof Api.Message) || value.id!==id ||
-                  !projectContext(value,batch.users,binding) || value.fromScheduled || !inputImageIdentity(value)) return;
+              if (batch.messages.length!==1 || !(value instanceof Api.Message) || value.id!==id || value.fromScheduled || !inputImageIdentity(value)) return;
+              const projected=projectContext(value,batch.users,binding);
+              if (!projected) return;
+              if (projected.forwarded) {
+                const snapshot=context?.replyChain.find(item=>item.messageId===id);
+                if (!snapshot || digest(projected)!==digest(snapshot) || forwardedContextProofs.get(projected)!==forwardedContextProofs.get(snapshot)) return fail();
+              }
               if(id===candidate.id && project(value,batch.users,binding,usernames,candidate.trigger==="ordinary")?.proof!==candidate.proof)return fail();
               if(id===sibling?.candidate.id && project(value,batch.users,binding,usernames,true)?.proof!==sibling.candidate.proof)return fail();
               return value;
@@ -828,6 +1025,7 @@ export async function createStandingConversationAdapter(input: {
             if (!source) continue;
             if(!readMediaFile)throw new Error("input image reader unavailable");
             const identity=inputImageIdentity(source);
+            const forwardProof=forwardedPayload(source)?.proof;
             const image = await downloadStandingInputImage(source, async (value,dcId) => {
               check(selectionSignal); if (!current() || route!==undefined) return fail();
               const result = await readMediaFile(value,dcId);
@@ -838,25 +1036,28 @@ export async function createStandingConversationAdapter(input: {
             images.push(image);
             const same=await request(getMessage(id),selectionSignal,envelope=>{
               const batch=batchOf(envelope,1), value=batch.messages[0];
-              return batch.messages.length===1 && value instanceof Api.Message && value.id===id &&
-                projectContext(value,batch.users,binding)!==undefined && inputImageIdentity(value)===identity &&
+              const projected=value instanceof Api.Message?projectContext(value,batch.users,binding):undefined;
+              return batch.messages.length===1 && value instanceof Api.Message && value.id===id && projected!==undefined &&
+                inputImageIdentity(value)===identity && forwardedPayload(value)?.proof===forwardProof &&
+                (!projected.forwarded || digest(projected)===digest(context?.replyChain.find(item=>item.messageId===id))) &&
                 (id!==sibling?.candidate.id || project(value,batch.users,binding,usernames,true)?.proof===sibling.candidate.proof);
             });
             if(!same)throw new Error("input image changed");
-            if(continuity.length && id===sibling?.candidate.id) {
+            if(continuity.length && (id===sibling?.candidate.id || id===forwardedAncestor?.id)) {
               await revalidate(selectionSignal);
               for(const hop of continuity) {
                 const unchanged=await request(getMessage(hop.id),selectionSignal,envelope=>{
                   const batch=batchOf(envelope,1),value=batch.messages[0];
                   if(batch.messages.length!==1 || !(value instanceof Api.Message) || value.id!==hop.id || value.fromScheduled)return false;
                   const projected=projectContext(value,batch.users,binding);
-                  return projected!==undefined && digest([projected,inputImageIdentity(value)??null,value.editDate??null])===hop.proof;
+                  return projected!==undefined && digest([projected,inputImageIdentity(value)??null,value.editDate??null,forwardedContextProofs.get(projected)??null])===hop.proof;
                 });
                 if(!unchanged)throw new Error("input image linkage changed");
               }
             }
           }
-          return Object.freeze({images:Object.freeze(images),...(sibling && images.some(image=>image.messageId===sibling.candidate.id)?{sources:Object.freeze([sibling.context])}:{})});
+          const visualSource=sibling?.context ?? forwardedAncestor?.context;
+          return Object.freeze({images:Object.freeze(images),...(visualSource && images.some(image=>image.messageId===visualSource.messageId)?{sources:Object.freeze([visualSource])}:{})});
         } catch {
           for (const image of images) image.bytes.fill(0);
           return Object.freeze({images:Object.freeze([]),unavailable:true as const});
@@ -890,6 +1091,47 @@ export async function createStandingConversationAdapter(input: {
       });
       ownPhotoAnchorPending = pending; return pending;
     } } : {};
+    const observed = observedSource ? { openObservedSource: () => openObservedLease(() => current() && route === undefined, selectionSignal) } : {};
+    const chatSearch = { openChatSearch(source: StandingChatSearchSource): StandingChatSearchLease {
+      if (source !== "internal" && source !== "community") return fail("protocol");
+      if (!current() || route !== undefined || historyBusy || activeChatSearch) return fail("protocol");
+      const target = source === "internal" ? { peer, peerId: binding.peerId, title: "Current chat" }
+        : observedSource ? { peer: observedSource.peer, peerId: observedSource.peerId, title: observedSource.info.title } : undefined;
+      if (!target) return fail("binding");
+      historyBusy = true;
+      const control = new AbortController(), searchSignal = AbortSignal.any([input.signal, selectionSignal, control.signal]);
+      let lease: StandingChatSearchLease, closing: Promise<void> | undefined;
+      const checkSearch = () => {
+        if (!current() || route !== undefined || activeChatSearch !== lease || !historyBusy || searchSignal.aborted) return fail("aborted");
+      };
+      try {
+        const reader = createStandingChatSearchLease({ source, title: target.title, peer: target.peer,
+          binding: { accountId: binding.accountId, peerId: target.peerId }, signal: searchSignal,
+          async invoke(requestValue) {
+            await typingSettlement; checkSearch(); let at = now();
+            if (!Number.isFinite(at) || lastHistory !== undefined && at < lastHistory) return fail();
+            while (lastHistory !== undefined && at - lastHistory < 3000) {
+              const before = at;
+              await wait(Math.max(1, Math.ceil(3000 - (at - lastHistory))), searchSignal);
+              checkSearch(); at = now(); if (!Number.isFinite(at) || at <= before) return fail();
+            }
+            checkSearch(); lastHistory = at; let envelope: unknown;
+            try { envelope = await invoke(requestValue); checkSearch(); return envelope; }
+            catch (error) { discard(envelope); throw error; }
+          } });
+        const onAbort = () => { void lease.close(); };
+        lease = Object.freeze({ read: reader.read.bind(reader), close() {
+          if (!closing) {
+            searchSignal.removeEventListener("abort", onAbort); control.abort();
+            closing = reader.close().finally(() => { if (activeChatSearch === lease) { activeChatSearch = undefined; historyBusy = false; } });
+            chatSearchClosings.add(closing);
+            void closing.then(() => chatSearchClosings.delete(closing!), () => chatSearchClosings.delete(closing!));
+          }
+          return closing;
+        } });
+        activeChatSearch = lease; searchSignal.addEventListener("abort", onAbort, { once: true }); return lease;
+      } catch (error) { control.abort(); historyBusy = false; throw error; }
+    } };
     const artifact = artifactsEnabled ? { openArtifactTransport(): StandingArtifactTransportLease {
       if (!current() || route !== undefined || historyBusy || activeArtifactLease) throw new ArtifactTransportError({stage:"admission",reason:"selection"});
       // The reservation lasts through send, exact readback and caller close.
@@ -1006,7 +1248,7 @@ export async function createStandingConversationAdapter(input: {
         sentText = undefined; sentEntities=undefined; finish(); return result;
       },
     });
-    if (!imagesEnabled) return Object.freeze({ transport, ...artifact, ...actions, ...ownPhoto, ...inputPhotos, ...passiveFinish });
+    if (!imagesEnabled) return Object.freeze({ transport, ...artifact, ...actions, ...observed, ...chatSearch, ...ownPhoto, ...inputPhotos, ...passiveFinish });
     // Forward the already captured sole invoker, not a mutable input.client reference.
     const media = createGeneratedImageTelegramTransport({ client: { invoke: async value => {
       const envelope=await invoke(value);
@@ -1031,14 +1273,14 @@ export async function createStandingConversationAdapter(input: {
         } catch(error) { close(); if(error instanceof GeneratedImageTransportError)throw error;return fail(input.signal.aborted || signal.aborted ? "aborted" : "protocol"); }
       },
     });
-    return Object.freeze({ transport, imageTransport, ...artifact, ...actions, ...ownPhoto, ...inputPhotos, ...passiveFinish });
+    return Object.freeze({ transport, imageTransport, ...artifact, ...actions, ...observed, ...chatSearch, ...ownPhoto, ...inputPhotos, ...passiveFinish });
   }
   /** One completed collection plus at most one candidate. Rejected reply anchors
    * are work remaining, even when removing one empties the queue: a later pulse
    * must collect afresh before it can issue an idle capability. */
   async function pollOne(signal: AbortSignal): Promise<Readonly<{ kind: "selected"; selection: StandingSelection } | { kind: "more" } | { kind: "idle" }>> {
     check(signal);
-    if (!initiativeDue() || passive && passive.candidate.id <= cursor) passive = undefined;
+    if (!initiativeDue() || passive && (passive.candidate.id <= cursor || !freshConversationDate(passive.candidate.date))) passive = undefined;
     if (continuation && (continuation.candidate.id <= cursor || !anchorFresh(continuation.anchor, continuation.candidate))) continuation = undefined;
     if (!queue.length) {
       if (!passive && !continuation && scannedThrough > cursor) await persist(scannedThrough, signal);
@@ -1058,7 +1300,9 @@ export async function createStandingConversationAdapter(input: {
     const candidate = continuing?.candidate ?? (initiative ? passive!.candidate : queue.shift()!);
     if(consumedAlbum(candidate)){if(initiative)passive=undefined;return Object.freeze({kind:"more"});}
     let anchorIdentity: AnchorIdentity | undefined;
-    const proof = !initiative && candidate.trigger === "reply" ? await anchorProof(candidate.replyId!, signal, value => { anchorIdentity = value; }) : undefined;
+    // A readable participant photo/forward is context, not evidence that its
+    // replies address Neurobro. Only self-authored anchors guarantee a turn.
+    const proof = !initiative && candidate.trigger === "reply" ? await anchorProof(candidate.replyId!, signal, value => { anchorIdentity = value; }, true) : undefined;
     if (!initiative && candidate.trigger === "reply" && proof === undefined) {
       if (initiativeDue()) {
         humanReplyProofs.set(candidate.id, candidate.proof);
@@ -1078,8 +1322,10 @@ export async function createStandingConversationAdapter(input: {
     }
     const primary = read.primary;
     let photoAnchor: Readonly<{ id: number; proof: string }> | undefined;
+    let replyAnchor = proof === undefined ? undefined : Object.freeze({ id: candidate.replyId!, proof });
     let context = await contextFor(read.contextPrimary, read.link, proof, signal,
-      artifactsEnabled && !read.scheduled && read.link.status === "bound" ? value => { photoAnchor = value; } : undefined, anchorIdentity);
+      artifactsEnabled && !read.scheduled && read.link.status === "bound" ? value => { photoAnchor = value; } : undefined, anchorIdentity,
+      read.link.status === "bound" ? value => { replyAnchor = value; } : undefined);
     if (!context) { await persist(candidate.id, signal); return Object.freeze({ kind: "more" }); }
     if (continuing) {
       if (!anchorFresh(continuing.anchor, candidate) || await anchorProof(continuing.anchor.message.messageId, signal) !== continuing.anchor.proof) {
@@ -1090,7 +1336,7 @@ export async function createStandingConversationAdapter(input: {
       // invitation as recent evidence, never as a fabricated reply ancestor.
       context = Object.freeze({ ...context, recent: Object.freeze([...context.recent.filter(value => value.messageId !== own.messageId).slice(-(STANDING_CONTEXT_WINDOW_LIMIT - 1)), own].sort((a,b) => a.messageId-b.messageId)) });
     }
-    if (initiative && !initiativeDue()) { passive = undefined; return Object.freeze({ kind: "more" }); }
+    if (initiative && (!initiativeDue() || !freshConversationDate(candidate.date))) { passive = undefined; return Object.freeze({ kind: "more" }); }
     if (input.checkpointQuestion) {
       try { await input.checkpointQuestion(primary, context); } catch { return fail("checkpoint"); }
       check(signal);
@@ -1101,16 +1347,252 @@ export async function createStandingConversationAdapter(input: {
     if (continuing) continuation = undefined;
     if (initiative) { initiativeAfter = now() + initiativeInterval; passive = undefined; humanReplyProofs.clear(); }
     else if (passive && (passive.candidate.id <= cursor || consumedAlbum(passive.candidate))) passive = undefined;
-    return Object.freeze({ kind: "selected", selection: Object.freeze({ primary, context, ...(initiative ? { initiative: true as const } : {}), ...(continuing ? { continuation: true as const } : {}), ...transportsFor(candidate, primary, proof, signal, photoAnchor, initiative, context, continuing?.anchor),
+    return Object.freeze({ kind: "selected", selection: Object.freeze({ primary, context, ...(initiative ? { initiative: true as const } : {}), ...(continuing ? { continuation: true as const } : {}), ...(observedSourceStatus?{observedSourceStatus}:{}), ...transportsFor(candidate, primary, replyAnchor, signal, photoAnchor, initiative, context, continuing?.anchor),
       cursor, pulseTyping: typingFor(candidate, signal) }) });
+  }
+  function openObservedLease(allowed: () => boolean, scopeSignal: AbortSignal, onePage = false): StandingObservedSourceLease {
+    const source = observedSource; if (!source) return fail("binding");
+      if (!allowed() || historyBusy || activeObservedSource) return fail();
+      historyBusy = true;
+      const control = new AbortController(), signal = AbortSignal.any([input.signal,scopeSignal,control.signal]);
+      let revoked = false, consumed = false, pending: Promise<unknown> | undefined, closing: Promise<void> | undefined;
+      let lease: StandingObservedSourceLease;
+      const localCheck = () => {
+        if (revoked || !allowed() || activeObservedSource !== lease || !historyBusy || signal.aborted) return fail("aborted");
+      };
+      // Share the existing history cadence, but local cancellation must not
+      // invoke the foreground check-close helper or destroy the selection.
+      const waitObserved = async () => {
+        localCheck(); let at=now();
+        if (!Number.isFinite(at) || lastHistory!==undefined && at<lastHistory) return fail();
+        while(lastHistory!==undefined && at-lastHistory<3000) {
+          const before=at;
+          await wait(Math.max(1,Math.ceil(3000-(at-lastHistory))),signal);
+          localCheck(); at=now(); if(!Number.isFinite(at) || at<=before)return fail();
+        }
+        localCheck(); lastHistory=at;
+      };
+      const stopObserved = () => { void lease.close(); };
+      let policy: ReturnType<typeof createStandingObservedSourcePolicy>;
+      try {
+        policy=createStandingObservedSourcePolicy({client:{invoke:async value=>{
+          localCheck(); await waitObserved(); localCheck(); let envelope:unknown;
+          try { envelope=await invoke(value); localCheck(); return envelope; }
+          catch(error){discard(envelope);throw error;}
+        }},binding:{accountId:binding.accountId,peerId:source.peerId},peer:source.peer,signal});
+        lease=Object.freeze({info:source.info,
+          readHistory(value: Readonly<{beforeMessageId?:number;limit?:number}> = {}) {
+            let beforeMessageId:number|undefined,limit:number;
+            try {
+              localCheck(); if(pending || onePage && consumed)return Promise.reject(new StandingAdapterError("protocol"));
+              if(!value || typeof value!=="object" || types.isProxy(value) || ![Object.prototype,null].includes(Object.getPrototypeOf(value)))return Promise.reject(new StandingAdapterError("protocol"));
+              const fields=Object.getOwnPropertyDescriptors(value);
+              if(Reflect.ownKeys(fields).some(key=>typeof key!=="string" || !["beforeMessageId","limit"].includes(key) || !("value" in fields[key]!) || !fields[key]!.enumerable))return Promise.reject(new StandingAdapterError("protocol"));
+              beforeMessageId=fields.beforeMessageId?.value;limit=fields.limit?.value??30;
+              if(fields.beforeMessageId && !validId(beforeMessageId) || fields.limit && (typeof fields.limit.value!=="number" || !Number.isSafeInteger(fields.limit.value) || fields.limit.value<1 || fields.limit.value>30))return Promise.reject(new StandingAdapterError("protocol"));
+            } catch(error){return Promise.reject(error);}
+            const requestValue=new Api.messages.GetHistory({peer:source.peer,offsetId:beforeMessageId??0,offsetDate:0,addOffset:0,limit,maxId:0,minId:0,hash:bigInt.zero});
+            const parameters={sourceRef:"community" as const,title:source.info.title,peerId:source.peerId,limit,
+              ...(beforeMessageId===undefined?{}:{beforeMessageId})};
+            consumed=true;
+            const work=Promise.resolve().then(async()=>{
+              await typingSettlement;localCheck();
+              const page=await policy.call(requestValue,envelope=>projectStandingObservedSourcePage(envelope,parameters));
+              localCheck();return page;
+            });
+            pending=work;void work.then(()=>{if(pending===work)pending=undefined;},()=>{if(pending===work)pending=undefined;});return work;
+          },
+          close():Promise<void> {
+            if(closing)return closing;
+            revoked=true;signal.removeEventListener("abort",stopObserved);control.abort();
+            closing=Promise.allSettled([pending,policy.close()]).then(()=>{
+              signal.removeEventListener("abort", stopObserved);
+              if(activeObservedSource===lease){activeObservedSource=undefined;historyBusy=false;}
+            });
+            const owned=closing;observedSourceClosings.add(owned);void owned.then(()=>observedSourceClosings.delete(owned));return closing;
+          }
+        });
+        activeObservedSource=lease;signal.addEventListener("abort",stopObserved,{once:true});return lease;
+      } catch(error){revoked=true;control.abort();historyBusy=false;throw error;}
   }
   function idleHistoryTicket(): StandingIdleHistoryTicket {
     const identity = Symbol("standing-idle-history"); idleTicketIdentity = identity;
-    return Object.freeze({ openTaskReply(value): StandingTaskReplyLease {
+    const takeSignal = (value: Readonly<{signal:AbortSignal}>): AbortSignal => {
+      if (!value || typeof value!=="object" || types.isProxy(value) || ![Object.prototype,null].includes(Object.getPrototypeOf(value))) return fail();
+      const fields=Object.getOwnPropertyDescriptors(value);
+      if(Reflect.ownKeys(fields).length!==1 || !fields.signal || !("value" in fields.signal) || !fields.signal.enumerable ||
+          types.isProxy(fields.signal.value) || !(fields.signal.value instanceof AbortSignal))return fail();
+      if(closed || input.signal.aborted || fields.signal.value.aborted || idleTicketIdentity!==identity)return fail("aborted");
+      if(busy || active || historyBusy)return fail();
+      idleTicketIdentity=undefined;return fields.signal.value;
+    };
+    function openTask(value: Parameters<StandingIdleHistoryTicket["openHistoryTask"]>[0], observed: boolean): StandingIdleHistoryLease {
+      // Validate host-owned scope inertly before consuming this ticket. The task
+      // store and service own authority; no raw checkpoint enters a model tool.
+      if (!value || typeof value !== "object" || types.isProxy(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new SelfHistoryReaderError("input");
+      const ds = Object.getOwnPropertyDescriptors(value), keys = Reflect.ownKeys(ds);
+      if (!["intent", "signal"].every(k => Object.hasOwn(ds, k)) || keys.some(k => typeof k !== "string" || !["intent", "signal", "checkpoint"].includes(k) || !("value" in ds[k]!) || !ds[k]!.enumerable)) throw new SelfHistoryReaderError("input");
+      let intent: StandingHistoryTaskIntent, saved: SelfHistoryTaskCheckpoint | undefined;
+      try { intent = snapshotStandingHistoryTaskIntent(ds.intent!.value); saved = ds.checkpoint ? snapshotSelfHistoryTaskCheckpoint(ds.checkpoint.value) : undefined; }
+      catch { throw new SelfHistoryReaderError("input"); }
+      const taskSignal: unknown = ds.signal!.value;
+      if (types.isProxy(taskSignal) || !(taskSignal instanceof AbortSignal)) throw new SelfHistoryReaderError("input");
+      const source = observed ? observedSource : undefined;
+      if (observed ? !intent.source || !source || !observedConfig?.workspaceId || intent.source.workspaceId !== observedConfig.workspaceId || intent.source.peerId !== source.peerId : !!intent.source) throw new SelfHistoryReaderError("binding");
+      const readPeer = source?.peer ?? peer, readBinding = { accountId: binding.accountId, peerId: standingHistoryTaskSourcePeerId(intent) };
+      if (intent.accountId !== binding.accountId || intent.chatId !== binding.peerId || saved && (saved.accountId !== intent.accountId || saved.chatId !== readBinding.peerId)) throw new SelfHistoryReaderError("binding");
+      if (saved && (saved.fromDate !== intent.fromDate || saved.toDate !== intent.toDate || saved.status !== "more")) throw new SelfHistoryReaderError("input");
+      if (closed || input.signal.aborted) { close(); throw new SelfHistoryReaderError("aborted"); }
+      if (busy || active || historyBusy || activeIdleHistory) throw new SelfHistoryReaderError("busy");
+      if (idleTicketIdentity !== identity || taskSignal.aborted) throw new SelfHistoryReaderError("aborted");
+      idleTicketIdentity = undefined; historyBusy = true;
+      const control = new AbortController(), signal = AbortSignal.any([input.signal, taskSignal, control.signal]);
+      let revoked = false, consumed = false, pending: Promise<SelfHistoryTaskPage> | undefined, closing: Promise<void> | undefined;
+      let reader: ReturnType<typeof createSelfHistoryReader> | undefined, lease: StandingIdleHistoryLease;
+      const localCheck = () => {
+        if (closed || input.signal.aborted) { close(); throw new SelfHistoryReaderError("aborted"); }
+        if (revoked || signal.aborted || active || busy || activeIdleHistory !== lease || !historyBusy) throw new SelfHistoryReaderError("aborted");
+      };
+      async function waitForIdleHistory(): Promise<void> {
+        localCheck(); let at = now();
+        if (!Number.isFinite(at) || lastHistory !== undefined && at < lastHistory) throw new SelfHistoryReaderError("protocol");
+        while (lastHistory !== undefined && at - lastHistory < 3000) {
+          const previous = at;
+          // Never pass task cancellation to the foreground check-close helper.
+          try { await wait(Math.max(1, Math.ceil(3000 - (at - lastHistory))), signal); }
+          catch { localCheck(); throw new SelfHistoryReaderError("transport"); }
+          localCheck(); at = now();
+          if (!Number.isFinite(at) || at <= previous) throw new SelfHistoryReaderError("protocol");
+        }
+        localCheck(); lastHistory = at;
+      }
+      const stopTask = () => { void lease.close(); }, stopAll = () => { close(); };
+      try {
+        reader = createSelfHistoryReader({ client: { invoke: async requestValue => {
+          localCheck();
+          // A separate source task lease admits only this exact fixed-peer history request.
+          // It cannot reach generic source tools, search, writes or alternate peers.
+          if (observed && (!(requestValue instanceof Api.messages.GetHistory) ||
+              utils.getPeerId(requestValue.peer) !== source!.peerId || requestValue.limit !== 100 ||
+              requestValue.addOffset !== 0 || requestValue.maxId !== 0 || requestValue.minId !== 0 ||
+              !requestValue.hash.eq(bigInt.zero))) throw new SelfHistoryReaderError("binding");
+          await waitForIdleHistory(); localCheck(); let envelope: unknown;
+          try {
+            envelope = await invoke(requestValue); localCheck();
+            // Persisting all fetched rows through sourceObserver here would
+            // pre-observe byte-omitted rows. Only consumed task sources return.
+            return envelope;
+          } catch (error) { discard(envelope); throw error; }
+        } }, peer: readPeer, binding: readBinding, self: input.self, signal, durableText: true });
+        lease = Object.freeze({ readTaskPage(): Promise<SelfHistoryTaskPage> {
+          try { localCheck(); if (consumed) throw new SelfHistoryReaderError("busy"); }
+          catch (error) { return Promise.reject(error); }
+          consumed = true;
+          pending = Promise.resolve().then(async () => {
+            await typingSettlement; localCheck();
+            const page = await reader!.readTaskPage({ fromDate: intent.fromDate, toDate: intent.toDate, ...(saved ? { checkpoint: saved } : {}) });
+            localCheck(); return page;
+          });
+          return pending;
+        }, close(): Promise<void> {
+          if (closing) return closing;
+          revoked = true; control.abort(); reader?.close();
+          closing = Promise.resolve(pending).then(() => {}, () => {}).finally(() => {
+            taskSignal.removeEventListener("abort", stopTask); input.signal.removeEventListener("abort", stopAll);
+            if (activeIdleHistory === lease) { activeIdleHistory = undefined; historyBusy = false; }
+          });
+          const owned = closing; idleHistoryClosings.add(owned);
+          void owned.then(() => idleHistoryClosings.delete(owned), () => idleHistoryClosings.delete(owned)); return closing;
+        } });
+        activeIdleHistory = lease;
+        taskSignal.addEventListener("abort", stopTask, { once: true }); input.signal.addEventListener("abort", stopAll, { once: true });
+        return lease;
+      } catch (error) { revoked = true; control.abort(); reader?.close(); historyBusy = false; throw error; }
+    }
+    return Object.freeze({
+      ...(observedSource && observedConfig?.workspaceId ? { openObservedHistoryTask(value: Parameters<StandingIdleHistoryTicket["openHistoryTask"]>[0]) { return openTask(value, true); } } : {}),
+      ...(observedSource ? {openObservedSource(value: Readonly<{signal:AbortSignal}>): StandingObservedSourceLease {
+        const signal=takeSignal(value);
+        return openObservedLease(()=>!closed && !active && !busy,signal,true);
+      }} : {}),
+      openCommunityAlert(value: Readonly<{signal:AbortSignal}>): StandingCommunityAlertLease {
+        const taskSignal=takeSignal(value),control=new AbortController(),signal=AbortSignal.any([input.signal,taskSignal,control.signal]);
+        historyBusy=true;
+        let revoked=false,sendConsumed=false,readConsumed=false,pending:Promise<unknown>|undefined,closing:Promise<void>|undefined;
+        let sentId:number|undefined,sentText:string|undefined,lease:StandingCommunityAlertLease;
+        const localCheck=()=>{
+          if(closed || signal.aborted || revoked || active || busy || activeCommunityAlert!==lease || !historyBusy)return fail("aborted");
+        };
+        const stopAlert=()=>{void lease.close();};
+        const operation=<T>(work:()=>Promise<T>):Promise<T>=>{
+          localCheck();if(pending)return Promise.reject(new StandingAdapterError("protocol"));
+          const owned=Promise.resolve().then(async()=>{await typingSettlement;localCheck();return work();});pending=owned;
+          void owned.then(()=>{if(pending===owned)pending=undefined;},()=>{if(pending===owned)pending=undefined;});return owned;
+        };
+        async function alertRequest<T>(requestValue:Api.AnyRequest,parse:(envelope:unknown)=>T):Promise<T>{
+          localCheck();let envelope:unknown;
+          try{try{envelope=await invoke(requestValue);}catch(error){localCheck();return fail(invokeFailure(error));}
+            localCheck();return parse(envelope);
+          }finally{discard(envelope);}
+        }
+        lease=Object.freeze({info:Object.freeze({accountId:binding.accountId,internalPeerId:binding.peerId}),
+          sendOnce(value:Readonly<{text:string;randomId:string}>):Promise<Readonly<{messageId:number}>>{
+            try{
+              localCheck();if(sendConsumed || pending || !value || typeof value!=="object" || types.isProxy(value) ||
+                ![Object.prototype,null].includes(Object.getPrototypeOf(value)))return fail();
+              const fields=Object.getOwnPropertyDescriptors(value),keys=Reflect.ownKeys(fields);
+              if(keys.length!==2 || !["text","randomId"].every(key=>Object.hasOwn(fields,key)) ||
+                keys.some(key=>typeof key!=="string" || !("value" in fields[key]!) || !fields[key]!.enumerable))return fail();
+              const text=fields.text!.value,randomId=fields.randomId!.value;
+              if(typeof text!=="string" || !text.trim() || text.length>900 || Buffer.byteLength(text)>4096 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(text) ||
+                Buffer.from(text).toString("utf8")!==text || typeof randomId!=="string" || !/^[1-9]\d{0,18}$/u.test(randomId) || BigInt(randomId)>=2n**63n)return fail();
+              sendConsumed=true;
+              return operation(async()=>{
+                const id=await alertRequest(new Api.messages.SendMessage({peer,message:text,randomId:bigInt(randomId),sendAs:new Api.InputPeerSelf(),
+                  noWebpage:true,entities:[],clearDraft:false,allowPaidFloodskip:false}),envelope=>extractPilotSentId(envelope,randomId,binding.peerId));
+                localCheck();sentId=id;sentText=text;return Object.freeze({messageId:id});
+              });
+            }catch(error){return Promise.reject(error instanceof StandingAdapterError?error:new StandingAdapterError("protocol"));}
+          },
+          readExact(messageId:number){
+            try{
+              localCheck();if(pending || readConsumed || !validId(messageId) || sentId!==messageId)return Promise.reject(new StandingAdapterError("protocol"));
+              readConsumed=true;
+              return operation(async()=>{
+                let at=now();if(!Number.isFinite(at) || lastHistory!==undefined && at<lastHistory)return fail();
+                while(lastHistory!==undefined && at-lastHistory<3000){const before=at;await wait(Math.max(1,Math.ceil(3000-(at-lastHistory))),signal);
+                  localCheck();at=now();if(!Number.isFinite(at) || at<=before)return fail();}
+                localCheck();lastHistory=at;
+                return alertRequest(getMessage(messageId),envelope=>{
+                  const message=exactMessage(envelope,binding.peerId,messageId);
+                  if(!message.out || message.post || !(message.fromId instanceof Api.PeerUser) || message.fromId.userId.toString()!==binding.accountId ||
+                    message.message!==sentText || message.replyTo || message.fwdFrom || message.viaBotId ||
+                    message.media && !(message.media instanceof Api.MessageMediaEmpty))return fail();
+                  const result=Object.freeze({messageId,chatId:binding.peerId,accountId:binding.accountId,text:message.message,replyToMessageId:null,
+                    out:true as const,fromId:binding.accountId,media:false as const,post:false as const});
+                  sentText=undefined;return result;
+                });
+              });
+            }catch(error){return Promise.reject(error instanceof StandingAdapterError?error:new StandingAdapterError("protocol"));}
+          },
+          close(){
+            if(closing)return closing;revoked=true;signal.removeEventListener("abort",stopAlert);control.abort();
+            closing=Promise.resolve(pending).then(()=>{},()=>{}).finally(()=>{
+              signal.removeEventListener("abort",stopAlert);sentText=undefined;
+              if(activeCommunityAlert===lease){activeCommunityAlert=undefined;historyBusy=false;}
+            });
+            const owned=closing;communityAlertClosings.add(owned);void owned.then(()=>communityAlertClosings.delete(owned));return closing;
+          }
+        });
+        activeCommunityAlert=lease;signal.addEventListener("abort",stopAlert,{once:true});return lease;
+      },
+      openTaskReply(value): StandingTaskReplyLease {
       if (!value || typeof value !== "object" || types.isProxy(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return fail();
       const ds = Object.getOwnPropertyDescriptors(value), keys = Reflect.ownKeys(ds);
-      if (keys.length !== 2 || !["intent", "signal"].every(k => Object.hasOwn(ds, k)) ||
-          keys.some(k => typeof k !== "string" || !("value" in ds[k]!) || !ds[k]!.enumerable)) return fail();
+      if (!["intent", "signal"].every(k => Object.hasOwn(ds, k)) ||
+          keys.some(k => typeof k !== "string" || !["intent", "signal", "taskReplyPolicy"].includes(k) || !("value" in ds[k]!) || !ds[k]!.enumerable)) return fail();
+      if (ds.taskReplyPolicy && ds.taskReplyPolicy.value !== "standalone-if-exact-missing") return fail();
+      const missingAnchorPolicy = ds.taskReplyPolicy?.value === "standalone-if-exact-missing";
       let intent: StandingHistoryTaskIntent;
       try { intent = snapshotStandingHistoryTaskIntent(ds.intent!.value); } catch { return fail(); }
       const taskSignal: unknown = ds.signal!.value;
@@ -1123,6 +1605,7 @@ export async function createStandingConversationAdapter(input: {
       const control = new AbortController(), signal = AbortSignal.any([input.signal, taskSignal, control.signal]);
       let revoked = false, sendConsumed = false, readConsumed = false, pending: Promise<unknown> | undefined, closing: Promise<void> | undefined;
       let sentId: number | undefined, sentText: string | undefined, sentEntities: readonly TelegramTextEntity[] | undefined;
+      let missingAnchorConfirmed = false;
       let lease: StandingTaskReplyLease;
       const localCheck = (callSignal?: AbortSignal) => {
         if (closed || input.signal.aborted) { close(); return fail("aborted"); }
@@ -1168,10 +1651,11 @@ export async function createStandingConversationAdapter(input: {
       }
       const transport: PilotTransport = Object.freeze({
         sendOnce(value: PilotSend, suppliedSignal: AbortSignal): Promise<{ messageId: number }> {
+          let diagnostic: PilotTaskSendDiagnostic = "task-preflight";
           try {
             const callSignal = callSignalCopy(suppliedSignal);
             if (sendConsumed || pending || !value || typeof value !== "object" || types.isProxy(value) ||
-                ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return Promise.reject(new StandingAdapterError("protocol"));
+                ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new StandingAdapterError("protocol");
             const fields = Object.getOwnPropertyDescriptors(value), names = Reflect.ownKeys(fields);
             if (!["chatId", "replyToMessageId", "text", "randomId"].every(k => Object.hasOwn(fields, k)) || names.some(k => typeof k !== "string" ||
                 !["chatId", "replyToMessageId", "text", "randomId", "entities"].includes(k) || !("value" in fields[k]!) || !fields[k]!.enumerable)) return fail();
@@ -1186,7 +1670,19 @@ export async function createStandingConversationAdapter(input: {
             sendConsumed = true;
             return operation(callSignal, async combined => {
               await waitForTaskRead(combined);
+              diagnostic = "task-anchor-read";
               await taskRequest(getMessage(intent.primaryMessageId), combined, envelope => {
+                diagnostic = "task-anchor-validation";
+                // The durable task, not a newly discovered Telegram trigger,
+                // owns this result. Only an exact empty response can detach it.
+                if (!(envelope instanceof Api.messages.Messages || envelope instanceof Api.messages.MessagesSlice || envelope instanceof Api.messages.ChannelMessages) ||
+                    envelope.messages.length !== 1 || envelope.chats.length > 100 || envelope.users.length > 100) return fail();
+                const empty = envelope.messages[0];
+                if (empty instanceof Api.MessageEmpty) {
+                  if (!missingAnchorPolicy || empty.id !== intent.primaryMessageId ||
+                      empty.peerId != null && !samePeer(empty.peerId, binding.peerId)) return fail("binding");
+                  missingAnchorConfirmed = true; return;
+                }
                 const message = exactMessage(envelope, binding.peerId, intent.primaryMessageId), batch = envelope as Batch;
                 if (message.out || message.post || !(message.fromId instanceof Api.PeerUser) || message.fromId.userId.toString() !== intent.requesterId ||
                     !Number.isSafeInteger(message.date) || message.date <= 0) return fail("binding");
@@ -1195,13 +1691,15 @@ export async function createStandingConversationAdapter(input: {
                 // Task identity survives edits of the original body. No new
                 // trigger, objective or foreground selection is inferred here.
               });
-              const id = await taskRequest(new Api.messages.SendMessage({ peer, replyTo: new Api.InputReplyToMessage({ replyToMsgId: intent.primaryMessageId }),
+              diagnostic = "task-send-rpc";
+              const id = await taskRequest(new Api.messages.SendMessage({ peer,
+                ...(missingAnchorConfirmed ? {} : { replyTo: new Api.InputReplyToMessage({ replyToMsgId: intent.primaryMessageId }) }),
                 message: text, randomId: bigInt(randomId), sendAs: new Api.InputPeerSelf(), noWebpage: true,
                 entities: wireEntities, clearDraft: false, allowPaidFloodskip: false }), combined,
-              envelope => extractPilotSentId(envelope, randomId, binding.peerId));
+              envelope => { diagnostic = "task-ack-parse"; return extractPilotSentId(envelope, randomId, binding.peerId); });
               localCheck(combined); sentId = id; sentText = text; sentEntities = entities; return { messageId: id };
-            });
-          } catch (error) { return Promise.reject(error instanceof StandingAdapterError ? error : new StandingAdapterError("protocol")); }
+            }).catch(error => { throw tagPilotTaskSendError(error, diagnostic); });
+          } catch (error) { return Promise.reject(tagPilotTaskSendError(error instanceof StandingAdapterError ? error : new StandingAdapterError("protocol"), diagnostic)); }
         },
         readExact(chatId: string, messageId: number, suppliedSignal: AbortSignal): Promise<PilotReadback> {
           try {
@@ -1212,10 +1710,15 @@ export async function createStandingConversationAdapter(input: {
               await waitForTaskRead(combined);
               const result = await taskRequest(getMessage(messageId), combined, envelope => {
                 const message = exactMessage(envelope, binding.peerId, messageId);
+                const anchored = message.replyTo instanceof Api.MessageReplyHeader && !message.replyTo.replyToScheduled &&
+                  message.replyTo.replyToMsgId === intent.primaryMessageId && (!message.replyTo.replyToPeerId || samePeer(message.replyTo.replyToPeerId, binding.peerId));
+                const standalone = missingAnchorConfirmed && missingAnchorPolicy && message.replyTo == null;
                 if (!message.out || message.post || !(message.fromId instanceof Api.PeerUser) || message.fromId.userId.toString() !== binding.accountId ||
-                    message.message !== sentText || !(message.replyTo instanceof Api.MessageReplyHeader) || message.replyTo.replyToScheduled ||
-                    message.replyTo.replyToMsgId !== intent.primaryMessageId || (message.replyTo.replyToPeerId && !samePeer(message.replyTo.replyToPeerId, binding.peerId))) return fail();
-                return Object.freeze({ messageId, chatId: binding.peerId, accountId: binding.accountId, replyToMessageId: intent.primaryMessageId, text: message.message,
+                    message.message !== sentText || !anchored && !standalone) return fail();
+                // Keep the observed wire target honest. Same-ID deduplication
+                // may instead return the earlier correctly anchored message.
+                return Object.freeze({ messageId, chatId: binding.peerId, accountId: binding.accountId, replyToMessageId: standalone ? null : intent.primaryMessageId, text: message.message,
+                  ...(standalone ? { taskReplyOriginMessageId: intent.primaryMessageId } : {}),
                   ...(sentEntities === undefined ? {} : { entities: fromTelegramEntities(message.message, message.entities ?? []) }) });
               });
               localCheck(combined); sentText = undefined; sentEntities = undefined; return result;
@@ -1237,79 +1740,7 @@ export async function createStandingConversationAdapter(input: {
       activeTaskReply = lease;
       taskSignal.addEventListener("abort", stopTask, { once: true }); input.signal.addEventListener("abort", stopAll, { once: true });
       return lease;
-    }, openHistoryTask(value): StandingIdleHistoryLease {
-      // Validate host-owned scope inertly before consuming this ticket. The task
-      // store and service own authority; no raw checkpoint enters a model tool.
-      if (!value || typeof value !== "object" || types.isProxy(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new SelfHistoryReaderError("input");
-      const ds = Object.getOwnPropertyDescriptors(value), keys = Reflect.ownKeys(ds);
-      if (!["intent", "signal"].every(k => Object.hasOwn(ds, k)) || keys.some(k => typeof k !== "string" || !["intent", "signal", "checkpoint"].includes(k) || !("value" in ds[k]!) || !ds[k]!.enumerable)) throw new SelfHistoryReaderError("input");
-      let intent: StandingHistoryTaskIntent, saved: SelfHistoryTaskCheckpoint | undefined;
-      try { intent = snapshotStandingHistoryTaskIntent(ds.intent!.value); saved = ds.checkpoint ? snapshotSelfHistoryTaskCheckpoint(ds.checkpoint.value) : undefined; }
-      catch { throw new SelfHistoryReaderError("input"); }
-      const taskSignal: unknown = ds.signal!.value;
-      if (types.isProxy(taskSignal) || !(taskSignal instanceof AbortSignal)) throw new SelfHistoryReaderError("input");
-      if (intent.accountId !== binding.accountId || intent.chatId !== binding.peerId || saved && (saved.accountId !== intent.accountId || saved.chatId !== intent.chatId)) throw new SelfHistoryReaderError("binding");
-      if (saved && (saved.fromDate !== intent.fromDate || saved.toDate !== intent.toDate || saved.status !== "more")) throw new SelfHistoryReaderError("input");
-      if (closed || input.signal.aborted) { close(); throw new SelfHistoryReaderError("aborted"); }
-      if (busy || active || historyBusy || activeIdleHistory) throw new SelfHistoryReaderError("busy");
-      if (idleTicketIdentity !== identity || taskSignal.aborted) throw new SelfHistoryReaderError("aborted");
-      idleTicketIdentity = undefined; historyBusy = true;
-      const control = new AbortController(), signal = AbortSignal.any([input.signal, taskSignal, control.signal]);
-      let revoked = false, consumed = false, pending: Promise<SelfHistoryTaskPage> | undefined, closing: Promise<void> | undefined;
-      let reader: ReturnType<typeof createSelfHistoryReader> | undefined, lease: StandingIdleHistoryLease;
-      const localCheck = () => {
-        if (closed || input.signal.aborted) { close(); throw new SelfHistoryReaderError("aborted"); }
-        if (revoked || signal.aborted || active || busy || activeIdleHistory !== lease || !historyBusy) throw new SelfHistoryReaderError("aborted");
-      };
-      async function waitForIdleHistory(): Promise<void> {
-        localCheck(); let at = now();
-        if (!Number.isFinite(at) || lastHistory !== undefined && at < lastHistory) throw new SelfHistoryReaderError("protocol");
-        while (lastHistory !== undefined && at - lastHistory < 3000) {
-          const previous = at;
-          // Never pass task cancellation to the foreground check-close helper.
-          try { await wait(Math.max(1, Math.ceil(3000 - (at - lastHistory))), signal); }
-          catch { localCheck(); throw new SelfHistoryReaderError("transport"); }
-          localCheck(); at = now();
-          if (!Number.isFinite(at) || at <= previous) throw new SelfHistoryReaderError("protocol");
-        }
-        localCheck(); lastHistory = at;
-      }
-      const stopTask = () => { void lease.close(); }, stopAll = () => { close(); };
-      try {
-        reader = createSelfHistoryReader({ client: { invoke: async requestValue => {
-          localCheck(); await waitForIdleHistory(); localCheck(); let envelope: unknown;
-          try {
-            envelope = await invoke(requestValue); localCheck();
-            // Persisting all fetched rows through sourceObserver here would
-            // pre-observe byte-omitted rows. Only consumed task sources return.
-            return envelope;
-          } catch (error) { discard(envelope); throw error; }
-        } }, peer, binding, self: input.self, signal, ...(references ? { references } : {}) });
-        lease = Object.freeze({ readTaskPage(): Promise<SelfHistoryTaskPage> {
-          try { localCheck(); if (consumed) throw new SelfHistoryReaderError("busy"); }
-          catch (error) { return Promise.reject(error); }
-          consumed = true;
-          pending = Promise.resolve().then(async () => {
-            await typingSettlement; localCheck();
-            const page = await reader!.readTaskPage({ fromDate: intent.fromDate, toDate: intent.toDate, ...(saved ? { checkpoint: saved } : {}) });
-            localCheck(); return page;
-          });
-          return pending;
-        }, close(): Promise<void> {
-          if (closing) return closing;
-          revoked = true; control.abort(); reader?.close();
-          closing = Promise.resolve(pending).then(() => {}, () => {}).finally(() => {
-            taskSignal.removeEventListener("abort", stopTask); input.signal.removeEventListener("abort", stopAll);
-            if (activeIdleHistory === lease) { activeIdleHistory = undefined; historyBusy = false; }
-          });
-          const owned = closing; idleHistoryClosings.add(owned);
-          void owned.then(() => idleHistoryClosings.delete(owned), () => idleHistoryClosings.delete(owned)); return closing;
-        } });
-        activeIdleHistory = lease;
-        taskSignal.addEventListener("abort", stopTask, { once: true }); input.signal.addEventListener("abort", stopAll, { once: true });
-        return lease;
-      } catch (error) { revoked = true; control.abort(); reader?.close(); historyBusy = false; throw error; }
-    } });
+    }, openHistoryTask(value) { return openTask(value, false); } });
   }
   async function poll(signal: AbortSignal, backgroundDue: boolean): Promise<StandingPollWork> {
       check(signal); if (busy || active || historyBusy || activeIdleHistory) return fail();

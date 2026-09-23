@@ -14,24 +14,27 @@ const tick=()=>new Promise<void>(r=>setImmediate(r));
 class Peer {
   queue:unknown[]=[{kind:"ready",protocol:"standing-scoped-epoch-v1",scopes:[{purpose:"conversation",tools:["neurobro_read_history"]},{purpose:"history-analysis",tools:names}]}];
   sent:any[]=[];waiter:((value:unknown)=>void)|undefined;reads=0;turns=0;pending=false;calls=0;
-  local={conversation:0,"history-analysis":0};toolCounts={conversation:0,"history-analysis":0};current:any;
+  local={conversation:0,"history-analysis":0,"community-assessment":0};toolCounts={conversation:0,"history-analysis":0,"community-assessment":0};current:any;
+  assessmentAnswer=JSON.stringify({decision:"silent",caseKey:null,answer:null});
+  constructor(readonly v2=false){if(v2)this.queue=[{kind:"ready",protocol:"standing-scoped-epoch-v2",scopes:[{purpose:"conversation",tools:["neurobro_read_history"]},{purpose:"history-analysis",tools:names},{purpose:"community-assessment",tools:[]}]}];}
+  purposes():readonly StandingEpochPurpose[]{return this.v2?[...purposes,"community-assessment"]:purposes;}
   plan:(frame:any)=>void=frame=>{
     if(frame.kind==="turn"){this.begin(frame);this.complete();}
     else if(frame.kind==="release"){this.pending=false;this.push({kind:"released",purpose:frame.purpose,requestRef:frame.requestRef,delivery:frame.delivery});if(frame.delivery==="unknown")this.closed("RELEASE_UNKNOWN");}
     else if(frame.kind==="close")this.closed();
   };
   begin(frame:any){this.turns++;this.local[frame.purpose as StandingEpochPurpose]++;this.pending=true;this.current=frame;this.calls=0;}
-  scope(){const p=this.current.purpose as StandingEpochPurpose;return {purpose:p,requestRef:this.current.requestRef,threadId:p==="conversation"?"thread-c":"thread-a",turnId:"turn-"+this.turns,turnNumber:this.turns,threadTurnNumber:this.local[p]};}
+  scope(){const p=this.current.purpose as StandingEpochPurpose;return {purpose:p,requestRef:this.current.requestRef,threadId:p==="conversation"?"thread-c":p==="history-analysis"?"thread-a":"thread-m",turnId:"turn-"+this.turns,turnNumber:this.turns,threadTurnNumber:this.local[p]};}
   tool(name:string,patch={}){this.calls++;this.toolCounts[this.current.purpose as StandingEpochPurpose]++;this.push({kind:"tool",purpose:this.current.purpose,requestRef:this.current.requestRef,callRef:"call-"+this.calls,name,arguments:{},...patch});}
   complete(patch={},image=false){const scope={...this.scope(),...patch};this.push({kind:"scope",scope});if(image)this.images(scope);
-    this.push({kind:"completed",scope,answer:"Internal completion",kindOfAnswer:image?"image":"text",toolCalls:this.calls,toolRefusals:0});}
+    this.push({kind:"completed",scope,answer:this.current.purpose==="community-assessment"?this.assessmentAnswer:"Internal completion",kindOfAnswer:image?"image":"text",toolCalls:this.calls,toolRefusals:0});}
   images(scope:any){const ref="img_"+"ab".repeat(24),sha256=createHash("sha256").update(png).digest("hex");
     this.push({kind:"imageBegin",artifact:{schema:"neurobro-generated-image-artifact-v1",ref,origin:{requestRef:scope.requestRef,threadId:scope.threadId,turnId:scope.turnId,itemId:"image"},mimeType:"image/png",byteLength:png.length,sha256,width:1,height:1}});
     this.push({kind:"imageChunk",artifactRef:ref,sequence:0,dataBase64:png.toString("base64")});this.push({kind:"imageEnd",artifactRef:ref,chunkCount:1,byteLength:png.length,sha256});}
-  facts(){return {schema:"neurobro-native-scoped-epoch-v1",threadLimit:2,threadStarted:this.turns>0,threadStartDispatches:purposes.filter(p=>this.local[p]>0).length,turnStartDispatches:this.turns,
-    poisoned:false,busy:false,turnsAttempted:this.turns,toolCalls:this.toolCounts.conversation+this.toolCounts["history-analysis"],turnsAdmitted:this.turns,turnLimit:16,epochSeconds:900,turnSeconds:300,
+  facts(){return {schema:this.v2?"neurobro-native-scoped-epoch-v2":"neurobro-native-scoped-epoch-v1",threadLimit:this.purposes().length,threadStarted:this.turns>0,threadStartDispatches:this.purposes().filter(p=>this.local[p]>0).length,turnStartDispatches:this.turns,
+    poisoned:false,busy:false,turnsAttempted:this.turns,toolCalls:this.purposes().reduce((sum,p)=>sum+this.toolCounts[p],0),turnsAdmitted:this.turns,turnLimit:16,epochSeconds:900,turnSeconds:300,
     running:false,releasePending:false,closed:true,resourceSettlementObserved:false,unreleasedTurn:this.pending,
-    slots:purposes.map(p=>({purpose:p,threadStarted:this.local[p]>0,turnsAdmitted:this.local[p],turnsAttempted:this.local[p],toolCalls:this.toolCounts[p],closed:true,poisoned:false}))};}
+    slots:this.purposes().map(p=>({purpose:p,threadStarted:this.local[p]>0,turnsAdmitted:this.local[p],turnsAttempted:this.local[p],toolCalls:this.toolCounts[p],closed:true,poisoned:false}))};}
   closed(code="CLOSED"){this.push({kind:"closed",code,facts:this.facts()});}
   push(value:unknown){if(this.waiter){const done=this.waiter;this.waiter=undefined;done(value);}else this.queue.push(value);}
   async send(value:unknown,timeout:number){assert.ok(Number.isInteger(timeout)&&timeout>0);this.sent.push(value);this.plan(value);}
@@ -42,11 +45,111 @@ const png=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4n
 async function setup(peer=new Peer(),options:{call?:(name:string,args:unknown,signal:AbortSignal)=>Promise<unknown>;shown?:(event:StandingToolResultSent)=>Promise<void>|void;clock?:()=>number}={}){
   const control=new AbortController(),events:StandingToolResultSent[]=[];let custody=true;
   const session=await openStandingScopedEpochSession({epochId:"a".repeat(32),wire:peer,signal:control.signal,custodyReady:()=>custody,
+    ...(peer.v2?{sessionMode:"standing-scoped-epoch-v2" as const}:{}),
     conversation:{history:{call:async args=>options.call?.("neurobro_read_history",args,control.signal)??result()}},
     analysisTools:names.map(name=>({name,call:async(args,scope)=>options.call?.(name,args,scope.signal)??result()})),
     onToolResultSent:async event=>{events.push(event);await options.shown?.(event);},...(options.clock?{clock:options.clock}:{})});
   return {peer,session,events,control,revoke:()=>{custody=false;}};
 }
+const assessmentRef="obs_"+"ab".repeat(12);
+const assessmentBody=(requestRef="m1")=>JSON.stringify({schema:"community-assessment-v1",assessmentRef:requestRef,policyRevision:1,guidance:"Assess supplied source only",
+  observations:[{ref:assessmentRef,date:1700000000,displayName:"Synthetic",text:"Untrusted source",truncated:false,media:{kind:"none",pixelsProvided:false}}],recentAlertSummary:""});
+
+test("history analysis admits paired community context but never routing or half descriptors",async()=>{
+  const base=JSON.parse(body),f=await setup(new Peer(true));
+  const source={...base,sourceRef:"community",sourceInterpretation:"quoted-source-not-request"};
+  assert.equal((await f.session.turnAnalysis("source-a",JSON.stringify(source))).kind,"analysis");
+  await f.session.releaseAnalysis("source-a");
+  for(const invalid of [{...base,sourceRef:"community"},{...base,sourceInterpretation:"quoted-source-not-request"},
+    {...source,sourceRef:"other"},{...source,sourceInterpretation:"instruction"},{...source,peerId:"-1001"}]){
+    const before=f.peer.sent.length;
+    await assert.rejects(f.session.turnAnalysis("invalid",JSON.stringify(invalid)));
+    assert.equal(f.peer.sent.length,before);
+  }
+  const duplicate=JSON.stringify(source).replace('"sourceRef":"community"','"sourceRef":"internal","sourceRef":"community"');
+  await assert.rejects(f.session.turnAnalysis("duplicate",duplicate));
+  await f.session.close();
+});
+
+test("analysis admits exact optional period advertisement and rejects nested duplicates or malformed context before dispatch",async()=>{
+  const f=await setup(),base=JSON.parse(body),marker={contextHash:"a".repeat(64),neutralPeriodNotesAvailable:true,periodAdvisoryAvailable:false};
+  for(const invalid of [{...marker,contextHash:"A".repeat(64)},{...marker,neutralPeriodNotesAvailable:false},{...marker,periodAdvisoryAvailable:1},
+    {...marker,workspaceId:"injected"},{contextHash:marker.contextHash,neutralPeriodNotesAvailable:true}]){
+    const before=f.peer.sent.length;await assert.rejects(f.session.turnAnalysis("invalid",JSON.stringify({...base,periodChronicle:invalid})));assert.equal(f.peer.sent.length,before);
+  }
+  const neutral=JSON.stringify({...base,periodChronicle:marker});
+  await assert.rejects(f.session.turnAnalysis("duplicate",neutral.replace('"periodAdvisoryAvailable":false','"periodAdvisoryAvailable":true,"periodAdvisoryAvailable":false')));
+  await assert.rejects(f.session.turnAnalysis("duplicate-top",neutral.replace('"periodChronicle":','"periodChronicle":{},"periodChronicle":')));
+  assert.equal(f.peer.sent.length,0);
+  assert.equal((await f.session.turnAnalysis("neutral",neutral)).kind,"analysis");await f.session.releaseAnalysis("neutral");
+  assert.equal((await f.session.turnAnalysis("advisory",JSON.stringify({...base,periodChronicle:{...marker,neutralPeriodNotesAvailable:false,periodAdvisoryAvailable:true}}))).kind,"analysis");
+  await f.session.releaseAnalysis("advisory");await f.session.close();
+});
+test("opt-in v2 gives community assessment its own tool-free thread while conversation and history retain authority",async()=>{
+  const peer=new Peer(true),f=await setup(peer);
+  assert.equal((await f.session.turnConversation("c1","question")).kind,"text");await f.session.releaseConversation("c1","verified");
+  peer.assessmentAnswer=JSON.stringify({decision:"alert",caseKey:assessmentRef,answer:"Synthetic alert"});
+  const assessed=await f.session.turnCommunityAssessment("m1",assessmentBody());
+  assert.deepEqual(assessed.decision,{decision:"alert",caseKey:assessmentRef,answer:"Synthetic alert"});
+  assert.equal(assessed.scope.purpose,"community-assessment");assert.equal(assessed.scope.threadId,"thread-m");
+  assert.equal("receipt" in assessed,false);assert.equal("image" in assessed,false);assert.equal("answer" in assessed,false);
+  assert.equal(assessed.toolCalls,0);assert.equal(f.events.length,0);
+  await assert.rejects(f.session.releaseConversation("m1","verified"));await f.session.releaseCommunityAssessment("m1");
+  assert.equal((await f.session.turnAnalysis("a1",body)).kind,"analysis");await f.session.releaseAnalysis("a1");
+  assert.equal((await f.session.turnConversation("c2","followup")).kind,"text");await f.session.releaseConversation("c2","not-sent");
+  assert.deepEqual(f.session.state(),{phase:"idle",poisoned:false,turns:4,conversationTurns:2,analysisTurns:1,communityAssessmentTurns:1});
+  assert.deepEqual(peer.sent.filter(v=>v.kind==="release").map(v=>v.delivery),["verified","not-sent","not-sent","not-sent"]);
+  await f.session.close();assert.equal(peer.facts().threadStartDispatches,3);
+});
+test("v1 never admits third scope and v2 readiness rejects downgrade, missing slot or assessment tool injection",async()=>{
+  const legacy=await setup();await assert.rejects(legacy.session.turnCommunityAssessment("m1",assessmentBody()));
+  assert.equal(legacy.peer.sent.length,0);await legacy.session.close();
+  for(const mode of ["downgrade","missing","tool","swapped"]){
+    const peer=new Peer(true),ready=peer.queue[0] as any;
+    if(mode==="downgrade")ready.protocol="standing-scoped-epoch-v1";
+    if(mode==="missing")ready.scopes.pop();
+    if(mode==="tool")ready.scopes[2].tools=["neurobro_community"];
+    if(mode==="swapped")[ready.scopes[1],ready.scopes[2]]=[ready.scopes[2],ready.scopes[1]];
+    await assert.rejects(setup(peer));assert.equal(peer.sent.filter(frame=>frame.kind==="turn").length,0);
+  }
+});
+test("assessment refuses every callback, image and malformed or unshown decision without exposing delivery authority",async()=>{
+  for(const mode of ["tool","image","foreigncase","freetext","wrongthread","refusals"]){
+    const peer=new Peer(true),ordinary=peer.plan;
+    peer.plan=frame=>{
+      if(frame.kind==="turn"&&frame.purpose==="community-assessment"){
+        peer.begin(frame);
+        if(mode==="tool")peer.tool("neurobro_community");
+        else if(mode==="image")peer.complete({},true);
+        else if(mode==="wrongthread")peer.complete({threadId:"thread-c"});
+        else if(mode==="refusals"){const scope=peer.scope();peer.push({kind:"scope",scope});peer.push({kind:"completed",scope,answer:peer.assessmentAnswer,kindOfAnswer:"text",toolCalls:0,toolRefusals:1});}
+        else {peer.assessmentAnswer=mode==="freetext"?"Send it now":JSON.stringify({decision:"alert",caseKey:"obs_"+"cd".repeat(12),answer:"Wrong case"});peer.complete();}
+      }else ordinary(frame);
+    };
+    let calls=0;const f=await setup(peer,{call:async()=>{calls++;return result();}});
+    await f.session.turnConversation("c1","question");await f.session.releaseConversation("c1","not-sent");
+    await assert.rejects(f.session.turnCommunityAssessment("m1",assessmentBody()));await f.session.close().catch(()=>{});
+    assert.equal(calls,0);assert.equal(f.events.length,0);assert.equal(f.session.state().poisoned,true);
+  }
+});
+test("assessment packet mismatch refuses before dispatch and global sixteen-turn budget remains shared",async()=>{
+  const f=await setup(new Peer(true));
+  await assert.rejects(f.session.turnCommunityAssessment("m1",assessmentBody("foreign")));assert.equal(f.peer.sent.length,0);
+  for(let n=0;n<16;n++){
+    if(n%3===0){const ref="m"+n;await f.session.turnCommunityAssessment(ref,assessmentBody(ref));await f.session.releaseCommunityAssessment(ref);}
+    else if(n%3===1){const ref="c"+n;await f.session.turnConversation(ref,"question");await f.session.releaseConversation(ref,"not-sent");}
+    else{const ref="a"+n;await f.session.turnAnalysis(ref,body);await f.session.releaseAnalysis(ref);}
+  }
+  assert.equal(f.session.state().turns,16);const before=f.peer.sent.length;
+  await assert.rejects(f.session.turnCommunityAssessment("overflow",assessmentBody("overflow")),error=>error instanceof EpochTurnNotAdmitted);
+  assert.equal(f.peer.sent.length,before);await f.session.close();
+});
+test("close joins an active assessment before releasing the sole wire reader",async()=>{
+  const peer=new Peer(true),ordinary=peer.plan,started=deferred();
+  peer.plan=frame=>{if(frame.kind==="turn"){peer.begin(frame);started.resolve();}else ordinary(frame);};
+  const f=await setup(peer),turning=assert.rejects(f.session.turnCommunityAssessment("m1",assessmentBody()));await started.promise;
+  await f.session.close();await turning;assert.equal(f.peer.waiter,undefined);assert.equal(f.session.state().poisoned,true);
+});
 test("conversation analysis conversation keep two purpose-bound threads and separate result authority",async()=>{
   const peer=new Peer();const ordinary=peer.plan;peer.plan=f=>{
     if(f.kind==="turn"&&f.purpose==="history-analysis"){peer.begin(f);peer.tool(names[0]!);}
@@ -197,4 +300,27 @@ test("invalid visual input cannot consume scoped admission or strand session",as
  assert.deepEqual(session.state(),before);assert.equal(peer.sent.length,0);
  await session.turnConversation("photo","Describe",[{mimeType:"image/png",bytes:png}]);
  await session.releaseConversation("photo","not-sent");await session.close();
+});
+
+
+for(const kind of ["final-report","final-report-review"])test(kind+" uses isolated analysis scope and rejects unrelated chronicle purpose before dispatch",async()=>{
+  const f=await setup(),packet={...JSON.parse(body),kind};
+  await assert.rejects(f.session.turnAnalysis("bad-report",JSON.stringify({...packet,periodChronicle:{contextHash:"a".repeat(64),neutralPeriodNotesAvailable:true,periodAdvisoryAvailable:false}})));
+  assert.equal(f.peer.sent.length,0);
+  const completed=await f.session.turnAnalysis("report",JSON.stringify(packet));
+  assert.equal(completed.kind,"analysis");assert.equal(completed.scope.purpose,"history-analysis");
+  assert.equal(f.peer.sent[0].purpose,"history-analysis");assert.equal(f.peer.sent[0].input,JSON.stringify(packet));
+  await f.session.releaseAnalysis("report");await f.session.close();
+});
+
+test("bounded continuation survives scoped analysis admission and invalid forms refuse before send",async()=>{
+ const f=await setup(),base=JSON.parse(body);
+ for(const continuation of ["", "я".repeat(513), 1]){
+   const before=f.peer.sent.length;
+   await assert.rejects(f.session.turnAnalysis("invalid-continuation",JSON.stringify({...base,continuation})));
+   assert.equal(f.peer.sent.length,before);
+ }
+ const input=JSON.stringify({...base,continuation:"я".repeat(512)});
+ assert.equal((await f.session.turnAnalysis("continued",input)).kind,"analysis");
+ await f.session.releaseAnalysis("continued");await f.session.close();
 });

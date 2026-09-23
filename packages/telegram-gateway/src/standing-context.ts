@@ -10,6 +10,9 @@ export type StandingContextMessage = Readonly<{
   date: number;
   replyToMessageId: number | null;
   text: string;
+  /** Forwarded payload, not instructions from its original author. The outer
+   * authorId identifies the participant who forwarded it into this chat. */
+  forwarded?: Readonly<{ originalDate: number; sourceName: string | null }>;
 }>;
 export type StandingContextStatus = "complete" | "partial" | "missing" | "truncated" | "unavailable";
 export type StandingContext = Readonly<{
@@ -24,3 +27,5 @@ export type StandingContext = Readonly<{
 }>;
 export const STANDING_CONTEXT_CHAIN_LIMIT = 8;
 export const STANDING_CONTEXT_WINDOW_LIMIT = 20;
+/** Telegram text is bounded in characters; retain complete multibyte input. */
+export const STANDING_INCOMING_TEXT_BYTES = 16 * 1024;

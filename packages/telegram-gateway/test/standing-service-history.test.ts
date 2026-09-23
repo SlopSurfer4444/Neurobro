@@ -1,4 +1,5 @@
 import test, { type TestContext } from "node:test";
+import { registerHooks } from "node:module";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,6 +12,7 @@ import { openStandingState } from "../src/standing-state.js";
 import { openStandingDialogueJournal } from "../src/standing-dialogue-journal.js";
 import { createEncryptedPilotStore, runPilotReply } from "../src/pilot-outbox.js";
 import { HISTORY_TASK_TOOL_SPECS } from "../src/standing-history-task-tools.js";
+import { STANDING_CHAT_SEARCH_TOOL_SPEC } from "../src/standing-chat-search.js";
 import { openStandingHistoryTaskManager } from "../src/standing-history-task-manager.js";
 import { readStandingHistoryTaskDelivery, StandingHistoryTaskDeliveryError, type StandingHistoryTaskDeliveryStatus } from "../src/standing-history-task-delivery.js";
 import { readStandingHistoryTaskDisposition } from "../src/standing-history-task-disposition.js";
@@ -19,6 +21,123 @@ import { openStandingHistoryAnalysisStore } from "../src/standing-history-analys
 import { decryptSession } from "../src/session-crypto.js";
 import type { StandingHistoryTaskIntent } from "../src/standing-history-task-store.js";
 import type { EpochExtraTool, EpochToolResult } from "../src/standing-tool-dispatcher.js";
+import { openStandingHistoryChronicleCache } from "../src/standing-history-chronicle-cache.js";
+import { openStandingHistoryPeriodChronicleStore } from "../src/standing-history-period-chronicle-store.js";
+
+test("membership loss during real adapter polling reproduces wait-other without analysis dispatch", async t => {
+  const f = await fixture(t, "complete"), create = f.ports.createClient;
+  let refused = 0;
+  f.ports.createClient = (...args) => {
+    const client = create(...args) as ReturnType<StandingPorts["createClient"]> & { invoke(request: Api.AnyRequest): Promise<unknown> };
+    const invoke = client.invoke.bind(client);
+    client.invoke = async request => {
+      if (request instanceof Api.messages.GetHistory) { refused++; throw Object.assign(new Error("CHANNEL_PRIVATE"), { code: 400, errorMessage: "CHANNEL_PRIVATE" }); }
+      return invoke(request);
+    };
+    return client;
+  };
+  const result = await runStandingWithPorts(f.input, f.ports);
+  assert.equal(refused, 1); assert.equal(result.status, "blocked");
+  assert.equal(result.failureStage, "wait"); assert.equal(result.failureCode, "other");
+  assert.equal(result.waitFailureOrigin, "adapter-poll");
+  assert.equal(result.waitFailureCode, "protocol");
+  const hostModule = new URL("../../../../project/verification/rm-0032-standing-host.mjs", import.meta.url).href;
+  const projected = (await import(hostModule)).normalizeStandingResult(result);
+  assert.equal(projected.waitFailureCode, "protocol");
+  assert.equal(JSON.stringify(projected).includes("CHANNEL_PRIVATE"), false);
+  assert.equal(result.clientSettled, true); assert.equal(result.verifiedReplies, 0);
+  assert.equal(f.counts().nativeTurns, 0); assert.ok(f.events.includes("native-close"));
+});
+
+async function periodServiceFixture(t: TestContext, omit?: "chronicle" | "parallel" | "workspace") {
+  const f = await fixture(t, "cancel"), original = f.input;
+  const accountCustodyRoot = f.root + "-account", paths = { ...original.paths, authConfigPath: join(accountCustodyRoot, "auth.json") };
+  const workspace = { workspaceId: "synthetic-period-service", target: { ...binding, title: "Synthetic period team" },
+    accountCustodyRoot, appRoot: f.root, ...paths, stateDirectory: original.stateDirectory };
+  const input: StandingInput = { ...original,
+    ...(omit === "workspace" ? {} : { paths, workspace, workProfile: "community-team" as const }),
+    ...(omit === "chronicle" ? {} : { historyChronicle: { producer: { model: "synthetic-model", promptVersion: "prompt", projectionVersion: "source", outputVersion: "output" } } }),
+    ...(omit === "parallel" ? {} : { historyParallel: { maxLeaves: 2 } }),
+    async openConversation(args) {
+      const connection = await original.openConversation!(args);
+      return { ...connection, concurrentAnalysis: true as const,
+        async acquireParallelAnalysisAdmissions() { throw Error("startup fixture must not dispatch a wave"); },
+        async verifyAnalysisWorkReleased() { throw Error("startup fixture has no release witnesses"); } };
+    },
+    notify(code) { original.notify(code); if (code === "STANDING_ONLINE") f.abort.abort(); },
+  };
+  return { ...f, input };
+}
+
+test("workspace parallel chronicle opens the fixed neutral store and joins its close before releasing credentials", async t => {
+  const f = await periodServiceFixture(t); let opened = 0, closed = 0, releaseClose!: () => void, markClosing!: () => void;
+  const closeGate = new Promise<void>(resolve => { releaseClose = resolve; }), closing = new Promise<void>(resolve => { markClosing = resolve; });
+  const running = runStandingWithPorts(f.input, { ...f.ports, async historyPeriodChronicleStore(input) {
+    opened++; assert.equal(input.directory, join(f.input.stateDirectory, "history-tasks", "period-chronicle")); assert.equal(input.passphrase, passphrase);
+    const store = await openStandingHistoryPeriodChronicleStore(input);
+    return { ...store, async close() { markClosing(); await closeGate; await store.close(); closed++; f.events.push("period-chronicle-closed"); } };
+  } });
+  try { await closing; assert.equal(f.events.includes("release-session"), false); assert.ok(f.events.includes("STANDING_ONLINE")); }
+  finally { releaseClose(); }
+  const result = await running; assert.equal(result.status, "stopped", serviceEvidence(f, result)); assert.equal(opened, 1); assert.equal(closed, 1);
+  assert.ok(f.events.indexOf("period-chronicle-closed") < f.events.indexOf("release-session")); assert.equal(f.counts().nativeTurns, 0);
+});
+
+test("neutral period store requires all three explicit workspace, chronicle and parallel gates", async t => {
+  for (const omitted of ["chronicle", "parallel", "workspace"] as const) {
+    const f = await periodServiceFixture(t, omitted); let opened = 0;
+    const result = await runStandingWithPorts(f.input, { ...f.ports, async historyPeriodChronicleStore() { opened++; throw Error("gate must remain closed"); } });
+    assert.equal(result.status, "stopped", serviceEvidence(f, result)); assert.equal(opened, 0); assert.ok(f.events.includes("STANDING_ONLINE"));
+    assert.equal((await readdir(join(f.input.stateDirectory, "history-tasks"))).includes("period-chronicle"), false);
+  }
+});
+
+test("optional neutral store opening failure preserves admitted service startup and joined teardown", async t => {
+  const f = await periodServiceFixture(t); let opened = 0;
+  const result = await runStandingWithPorts(f.input, { ...f.ports, async historyPeriodChronicleStore() { opened++; throw Error("synthetic unavailable neutral notes"); } });
+  assert.equal(result.status, "stopped", serviceEvidence(f, result)); assert.equal(opened, 1); assert.ok(f.events.includes("STANDING_ONLINE"));
+  assert.ok(f.events.includes("release-session")); assert.equal(f.counts().nativeTurns, 0);
+});
+
+test("unjoined neutral store closure blocks safe service replacement", async t => {
+  const f = await periodServiceFixture(t);
+  const result = await runStandingWithPorts(f.input, { ...f.ports, async historyPeriodChronicleStore(input) {
+    const store = await openStandingHistoryPeriodChronicleStore(input); return { ...store, async close() { await store.close(); throw Error("synthetic close failure"); } };
+  } });
+  assert.equal(result.status, "blocked", serviceEvidence(f, result)); assert.equal(result.lockPreserved, true); assert.ok(f.events.includes("STANDING_ONLINE"));
+});
+
+test("explicit service chronicle pins producer identity, captures real leaves and joins service-owned cache closure", async t => {
+  const f = await fixture(t, "complete"), producer = { model: "synthetic-admitted-model", promptVersion: "synthetic-native-prompt-hash", projectionVersion: "source-v1", outputVersion: "analysis-v1" };
+  const expected = { ...producer }; let opened = 0, captured = 0, closed = 0;
+  const result = await runStandingWithPorts({ ...f.input, historyChronicle: { producer } }, { ...f.ports, async historyChronicleCache(input) {
+    opened++; assert.equal(input.directory, join(f.input.stateDirectory, "history-tasks", "chronicle"));
+    const cache = await openStandingHistoryChronicleCache(input); producer.model = "mutated-after-service-admission";
+    return { ...cache, async remember(value) { assert.deepEqual(value.producer, expected); assert.ok(f.counts().nativeClosed > 0); captured++; return cache.remember(value); },
+      async close() { await cache.close(); closed++; f.events.push("chronicle-closed"); } };
+  } });
+  assert.equal(result.status, "stopped", serviceEvidence(f, result)); assert.equal(opened, 1); assert.ok(captured > 0); assert.equal(closed, 1);
+  assert.equal(f.counts().finalSends, 1); assert.ok(f.events.indexOf("chronicle-closed") < f.events.indexOf("release-session"));
+  const partitions = await readdir(join(f.input.stateDirectory, "history-tasks", "chronicle")); assert.ok(partitions.length > 0);
+});
+
+test("service default leaves chronicle disabled and invalid opt-in fails before opening sessions", async t => {
+  const normal = await fixture(t, "cancel"); let opened = 0;
+  const result = await runStandingWithPorts(normal.input, { ...normal.ports, async historyChronicleCache() { opened++; throw Error("must remain disabled"); } });
+  assert.equal(result.status, "stopped", serviceEvidence(normal, result)); assert.equal(opened, 0);
+  assert.equal((await readdir(join(normal.input.stateDirectory, "history-tasks"))).includes("chronicle"), false);
+  const invalid = await fixture(t, "cancel"); let evaluated = 0;
+  const producer = { get model() { evaluated++; return "unsafe getter"; }, promptVersion: "p", projectionVersion: "s", outputVersion: "o" };
+  const failed = await runStandingWithPorts({ ...invalid.input, historyChronicle: { producer } }, invalid.ports);
+  assert.equal(failed.status, "blocked"); assert.equal(evaluated, 0); assert.equal(invalid.events.includes("lock"), false); assert.equal(invalid.counts().clients, 0);
+});
+
+test("unavailable optional chronicle becomes misses while normal service history still completes", async t => {
+  const f = await fixture(t, "complete"); let opened = 0;
+  const producer = { model: "synthetic-model", promptVersion: "prompt", projectionVersion: "source", outputVersion: "output" };
+  const result = await runStandingWithPorts({ ...f.input, historyChronicle: { producer } }, { ...f.ports, async historyChronicleCache() { opened++; throw Error("synthetic unavailable derived cache"); } });
+  assert.equal(result.status, "stopped", serviceEvidence(f, result)); assert.equal(opened, 1); assert.equal(f.counts().finalSends, 1); assert.ok(f.counts().nativeTurns > 0);
+});
 
 const passphrase = "synthetic-service-history-passphrase";
 const peer = new Api.PeerChannel({ channelId: bigInt(123) });
@@ -32,7 +151,7 @@ const resultBody = (value: unknown) => {
   const result = value as EpochToolResult; assert.equal(result.success, true);
   return JSON.parse(result.contentItems[0]!.text);
 };
-type Mode = "cancel" | "complete" | "restart" | "recall" | "refusal" | "multipart";
+type Mode = "cancel" | "complete" | "restart" | "recall" | "refusal" | "multipart" | "no-report" | "finalizer";
 async function fixture(t: TestContext, mode: Mode, saved?: { root: string; values: Api.Message[]; taskRef: string }) {
   const root = saved?.root ?? await mkdtemp(join(resolve(tmpdir()), "standing-service-history-"));
   if (!saved) t.after(async () => { assert.equal(dirname(root), resolve(tmpdir())); await rm(root, { recursive: true, force: true }); });
@@ -44,10 +163,14 @@ async function fixture(t: TestContext, mode: Mode, saved?: { root: string; value
   const events: string[] = [], calls: Api.AnyRequest[] = [], foreground: number[] = [], due: boolean[] = [];
   const memories: { primary: number; tasks: any[]; ownActions: any[]; notes: any[]; coverage: any }[] = [];
   let tools: readonly EpochExtraTool[] = [], taskRef = saved?.taskRef ?? "", currentPrimary = 0;
+  const historyTool = (name: string) => {
+    const tool = tools.find(tool => tool.name === name); assert.ok(tool, `missing history tool: ${name}`); return tool;
+  };
   let clients = 0, nativeTurns = 0, nativeReleased = 0, nativeClosed = 0, finalSends = 0, pulses = 0, afterFinal = 0, time = 0;
   let deliveryRefusals = 0, turnsAtRefusal = 0, laterPrimary = 0;
   let afterDeliveryPrimary = 0;
   const finalTickets: object[] = [], partial: StandingHistoryTaskDeliveryStatus[] = [];
+  const finalReportBody = "User-facing report.\n".repeat(500);
   const chosenSummary = mode === "multipart" ? summary + "x".repeat(4096 - Buffer.byteLength(summary)) : summary;
   const batch = (rows: Api.TypeMessage[]) => new Api.messages.Messages({ messages: rows, users: [self(),
     new Api.User({ id: bigInt(456), firstName: "First requester" }), new Api.User({ id: bigInt(999), firstName: "Other requester" })], chats: [] });
@@ -85,38 +208,54 @@ async function fixture(t: TestContext, mode: Mode, saved?: { root: string; value
         notes: shared.items.filter((item: any) => item.evidence.kind === "model-analysis-notes").map((item: any) => item.evidence),
         coverage: shared.coverage.tasks });
       foreground.push(currentPrimary); events.push("foreground:" + currentPrimary);
-      assert.deepEqual(tools.map(tool => tool.name), HISTORY_TASK_TOOL_SPECS.map(tool => tool.name));
+      assert.deepEqual(tools.map(tool => tool.name), [STANDING_CHAT_SEARCH_TOOL_SPEC.name, ...HISTORY_TASK_TOOL_SPECS.map(tool => tool.name)]);
       const scope = { requestRef, callRef: "task-call", signal: abort.signal };
       if (request === "create") {
-        const created = resultBody(await tools[0]!.call({ fromDate: 100, toDate: 200, timezone: "UTC", objective: "Summarize the available source" }, scope));
+        const created = resultBody(await historyTool("neurobro_create_history_task").call({ fromDate: 100, toDate: 200, timezone: "UTC", objective: "Summarize the available source" }, scope));
         taskRef = created.taskRef; assert.equal(created.control.state, "queued"); assert.equal(created.attempts.reservedAttempts, 0);
         assert.deepEqual(created.delivery, { state: "not-attempted", consumed: false });
         assert.deepEqual(created.disposition, { storage: "absent" });
       } else if (request === "foreign") {
-        for (const tool of [tools[1]!, tools[2]!]) assert.equal((await tool.call({ taskRef }, scope) as EpochToolResult).success, false);
+        for (const tool of [historyTool("neurobro_history_task_status"), historyTool("neurobro_cancel_history_task")]) assert.equal((await tool.call({ taskRef }, scope) as EpochToolResult).success, false);
       } else if (request === "cancel") {
-        assert.equal(resultBody(await tools[1]!.call({ taskRef }, scope)).control.state, "queued");
-        assert.equal(resultBody(await tools[2]!.call({ taskRef }, { ...scope, callRef: "cancel" })).control.state, "cancelled");
-      } else if (mode === "restart") assert.equal(resultBody(await tools[1]!.call({ taskRef }, scope)).attempts.last.nodeCommitted, true);
+        assert.equal(resultBody(await historyTool("neurobro_history_task_status").call({ taskRef }, scope)).control.state, "queued");
+        assert.equal(resultBody(await historyTool("neurobro_cancel_history_task").call({ taskRef }, { ...scope, callRef: "cancel" })).control.state, "cancelled");
+      } else if (mode === "restart") assert.equal(resultBody(await historyTool("neurobro_history_task_status").call({ taskRef }, scope)).attempts.last.nodeCommitted, true);
       return { kind: "text", answer: "Foreground answer " + currentPrimary };
     },
     async release(requestRef, delivery) {
       assert.equal(delivery, "verified");
-      const retired = await tools[1]!.call({ taskRef }, { requestRef, callRef: "after-finish", signal: abort.signal }) as EpochToolResult;
+      const retired = await historyTool("neurobro_history_task_status").call({ taskRef }, { requestRef, callRef: "after-finish", signal: abort.signal }) as EpochToolResult;
       assert.equal(retired.success, false); events.push("foreground-released");
       if (mode === "cancel" && foreground.length === 3) abort.abort();
       if (mode === "recall") abort.abort();
     },
     async close() { events.push("native-close"); return { resourcesSettled: true, persisted: true }; },
     async acquireAnalysisAdmission(requestRef) {
-      const nativeBinding = { epochId: "a".repeat(32), requestRef, purpose: "history-analysis" as const };
+      const nativeBinding = { epochId: nativeTurns.toString(16).padStart(32, "0"), requestRef, purpose: "history-analysis" as const };
       return { nativeBinding,
         async turnAnalysis(ref, text, supplied) {
           nativeTurns++; events.push("analysis"); assert.equal(JSON.parse(text).schema, "neurobro-history-analysis-input-v1");
           const scope = { requestRef: ref, callRef: "material", signal: abort.signal };
           const material = await supplied.analysisTools[0]!.call({}, scope) as EpochToolResult; assert.equal(material.success, true);
           supplied.onToolResultSent({ requestRef: ref, callRef: "material", name: "neurobro_analysis_material", result: material });
-          const committed = await supplied.analysisTools[2]!.call({ output: { summary: chosenSummary, claims: [] } }, { ...scope, callRef: "commit" }) as EpochToolResult;
+          const isFinal = JSON.parse(text).kind === "final-report", isReview = JSON.parse(text).kind === "final-report-review";
+          if (isFinal) events.push("final-report");
+          let review: unknown;
+          if (isReview) {
+            events.push("final-report-review");
+            const candidate = resultBody(material).candidate;
+            let body = "";
+            for (let pageIndex = 1; pageIndex <= candidate.pages; pageIndex++) {
+              const callRef = "candidate-" + pageIndex;
+              const page = await supplied.analysisTools[0]!.call({ purpose: "final-report-candidate", pageIndex, position: null }, { ...scope, callRef }) as EpochToolResult;
+              assert.equal(page.success, true); body += resultBody(page).text;
+              supplied.onToolResultSent({ requestRef: ref, callRef, name: "neurobro_analysis_material", result: page });
+            }
+            assert.equal(body, finalReportBody); assert.notEqual(body, chosenSummary);
+            review = { reportReview: { candidateHash: candidate.candidateHash, verdict: "accepted", findings: [] } };
+          }
+          const committed = await supplied.analysisTools[2]!.call(isReview ? review : isFinal ? { finalReport: { body: finalReportBody } } : { output: { summary: chosenSummary, claims: [] } }, { ...scope, callRef: "commit" }) as EpochToolResult;
           assert.equal(committed.success, true);
           supplied.onToolResultSent({ requestRef: ref, callRef: "commit", name: "neurobro_analysis_commit", result: committed });
           return { kind: "analysis", answer: "Saved", toolCalls: 2, toolRefusals: 0, scope: { epochId: nativeBinding.epochId, purpose: "history-analysis", requestRef: ref,
@@ -141,9 +280,21 @@ async function fixture(t: TestContext, mode: Mode, saved?: { root: string; value
   };
   const paths = { authConfigPath: join(root, "synthetic-auth"), bindingPath: join(root, "synthetic-binding"), modelReceiptPath: join(root, "synthetic-receipt"),
     attemptDirectory: join(root, "unused"), killSwitchPath: join(root, "STOP") };
-  const input: StandingInput = { paths, stateDirectory, credentials: { apiId: 123, apiHash: "a".repeat(32), passphrase }, signal: abort.signal,
+  let input: StandingInput = { paths, stateDirectory, credentials: { apiId: 123, apiHash: "a".repeat(32), passphrase }, signal: abort.signal,
+    async historyFinalReport({ intent, readiness }) {
+      if (mode === "no-report") {
+        deliveryRefusals++; turnsAtRefusal = nativeTurns; events.push("synthetic-coverage-refusal");
+        laterPrimary = Math.max(...values.map(row => row.id)) + 1;
+        values.push(message(laterPrimary, "ПРОМПТ later after missing report"));
+        return undefined;
+      }
+      // Explicit host fixture output, not a production analysis-summary fallback.
+      return { schema: "standing-history-final-report-v1", taskRef: intent.taskId,
+        sourceHead: readiness.sourceHead, analysisHead: readiness.expectedHead, body: chosenSummary };
+    },
     enableHistoryTasks: true, modelState: () => ({ blocked: false }), async model() { throw Error("cold model must not run"); },
     openConversation({ extraTools }) { tools = extraTools!; return connection; }, notify(code) { events.push(code); } };
+  if (mode === "finalizer") { const { historyFinalReport: _lookup, ...defaults } = input; input = defaults; }
   const ports = {
     async prepare() { return { paths, config: { account: { sessionFile: "synthetic-no-auth" } }, binding, ownerLock: join(root, "lock") }; },
     async acquireLock() { events.push("lock"); return async () => { events.push("release-lock"); }; },
@@ -166,7 +317,7 @@ async function fixture(t: TestContext, mode: Mode, saved?: { root: string; value
         }
         if (mode === "multipart" && finalSends === 1 && partial.length === 0) partial.push(await readStandingHistoryTaskDelivery({
           directory: join(stateDirectory, "history-tasks", "delivery"), passphrase, intent: await readIntent() }));
-        if (mode !== "cancel" && (finalSends >= (mode === "multipart" ? 2 : 1) || deliveryRefusals > 0 || mode === "restart") && ++afterFinal > 12) abort.abort();
+        if (mode !== "cancel" && (finalSends >= (mode === "finalizer" ? 4 : mode === "multipart" ? 2 : 1) || deliveryRefusals > 0 || mode === "restart") && ++afterFinal > 12) abort.abort();
         if (pulses > 160) { abort.abort(); throw Error("synthetic pulse budget exhausted"); }
         const work = await actual.pollWork(signal, options);
         if (work.kind === "background" || work.kind === "idle") {
@@ -193,7 +344,7 @@ async function fixture(t: TestContext, mode: Mode, saved?: { root: string; value
     try { return { sourceHead: (await source.status()).readProgress.chainHash, analysisHead: (await analysis.status()).headHash }; }
     finally { await analysis.close(); await source.close(); }
   }
-  return { root, values, input, ports, abort, events, calls, foreground, due, memories, directories, readIntent, readHeads, finalTickets, partial, chosenSummary,
+  return { root, values, input, ports, abort, events, calls, foreground, due, memories, directories, readIntent, readHeads, finalTickets, partial, chosenSummary, finalReportBody,
     taskRef: () => taskRef, tools: () => tools, counts: () => ({ clients, nativeTurns, nativeReleased, nativeClosed, finalSends, pulses, deliveryRefusals, turnsAtRefusal, laterPrimary, afterDeliveryPrimary }) };
 }
 
@@ -201,7 +352,7 @@ function serviceEvidence(f: Awaited<ReturnType<typeof fixture>>, result: Awaited
   return JSON.stringify({ result, counts: f.counts(), events: f.events.slice(-24) });
 }
 
-test("history-enabled service registers three actor-bound tools and revokes them through foreground finish and service cleanup", async t => {
+test("history-enabled service registers universal search and three actor-bound tools and revokes them through foreground finish and service cleanup", async t => {
   const f = await fixture(t, "cancel"), result = await runStandingWithPorts(f.input, f.ports);
   assert.equal(result.status, "stopped", serviceEvidence(f, result)); assert.equal(result.clientSettled, true); assert.equal(result.lockPreserved, false);
   assert.equal(result.verifiedReplies, 3); assert.deepEqual(f.foreground, [91, 92, 93]); assert.equal(f.counts().clients, 1);
@@ -223,7 +374,12 @@ test("history-enabled service registers three actor-bound tools and revokes them
 });
 
 test("service fairly reads and analyzes persisted history then sends one final reply; restart never repeats that delivery", async t => {
-  const f = await fixture(t, "complete"), result = await runStandingWithPorts(f.input, f.ports);
+  const f = await fixture(t, "complete"); let backgroundReadiness = 0;
+  const result = await runStandingWithPorts({ ...f.input, async openConversation(input) {
+    const connection = await f.input.openConversation!(input);
+    return { ...connection, async prepareAnalysis() { backgroundReadiness++; return { restoration: false }; } };
+  } }, f.ports);
+  assert.ok(backgroundReadiness > 0, "service forwards the dedicated background readiness path to actual runner admission");
   assert.equal(result.status, "stopped", serviceEvidence(f, result)); assert.equal(result.lockPreserved, false); assert.equal(f.counts().clients, 1);
   assert.equal(f.counts().finalSends, 1); assert.ok(f.counts().nativeTurns > 0); assert.equal(f.counts().nativeTurns, f.counts().nativeReleased);
   const afterDelivery = f.memories.find(memory => memory.primary === f.counts().afterDeliveryPrimary);
@@ -242,6 +398,18 @@ test("service fairly reads and analyzes persisted history then sends one final r
   assert.ok(f.events.slice(firstAnalysis + 1).some(event => event.startsWith("foreground:")));
   const intent = await f.readIntent(), delivery = await readStandingHistoryTaskDelivery({ directory: f.directories.delivery, passphrase, intent });
   assert.equal(delivery.delivery, "verified"); assert.equal(delivery.consumed, true); assert.equal(delivery.leaseJoined, true);
+  const source = await openStandingHistoryTaskStore({ directory: f.directories.pages, passphrase, intent, mode: "open" });
+  const analysis = await openStandingHistoryAnalysisStore({ directory: f.directories.analysis, passphrase, intent, mode: "open", readSourcePage: index => source.readPage(index) });
+  try {
+    const sourceStatus = await source.status(), analysisStatus = await analysis.status(), node = await analysis.readNodeAt(1);
+    assert.equal(sourceStatus.readProgress.committedPages, 2);
+    assert.equal(analysisStatus.analysisNodes, 1, "wide runner packs source and terminal empty page into one durable leaf");
+    assert.ok(node && "materials" in node.inputs); assert.equal(node.kind, "leaf");
+    assert.equal(node.inputs.materials.length, 2);
+    assert.deepEqual(node.coverage.map(span => span.pageIndex), [1, 2]);
+    assert.equal(node.coverage.reduce((rows, span) => rows + span.range.toRow - span.range.fromRow, 0), 2);
+    assert.equal(f.counts().nativeTurns, 1);
+  } finally { await analysis.close(); await source.close(); }
   const names = await readdir(join(f.directories.delivery, f.taskRef()));
   const restarted = await fixture(t, "recall", { root: f.root, values: f.values, taskRef: f.taskRef() });
   const after = await runStandingWithPorts(restarted.input, restarted.ports);
@@ -261,8 +429,8 @@ test("service fairly reads and analyzes persisted history then sends one final r
   assert.deepEqual(await readStandingHistoryTaskDelivery({ directory: f.directories.delivery, passphrase, intent }), delivery);
 });
 
-test("synthetic typed task-local coverage refusal persists exact-head disposition and leaves later foreground and restart usable", async t => {
-  const f = await fixture(t, "refusal"), result = await runStandingWithPorts(f.input, f.ports);
+for (const mode of ["refusal", "no-report"] as const) test(`${mode} persists task-local disposition and leaves later foreground and restart usable`, async t => {
+  const f = await fixture(t, mode), result = await runStandingWithPorts(f.input, f.ports);
   assert.equal(result.status, "stopped", serviceEvidence(f, result)); assert.equal(result.lockPreserved, false); assert.equal(result.clientSettled, true);
   assert.equal(f.counts().clients, 1); assert.equal(f.counts().deliveryRefusals, 1); assert.equal(f.counts().finalSends, 0);
   assert.equal(f.counts().nativeTurns, f.counts().turnsAtRefusal); assert.equal(f.finalTickets.length, 0);
@@ -271,7 +439,7 @@ test("synthetic typed task-local coverage refusal persists exact-head dispositio
   const intent = await f.readIntent(), heads = await f.readHeads(), directory = join(f.input.stateDirectory, "history-tasks", "disposition");
   const disposition = await readStandingHistoryTaskDisposition({ directory, passphrase, intent, ...heads });
   assert.equal(disposition.storage, "ready"); if (disposition.storage !== "ready") throw Error("missing disposition");
-  assert.deepEqual(disposition.disposition, { schema: "standing-history-task-disposition-v1", reason: "coverage", ...heads });
+  assert.deepEqual(disposition.disposition, { schema: "standing-history-task-disposition-v1", reason: mode === "no-report" ? "report-required" : "coverage", ...heads });
   assert.equal((await readStandingHistoryTaskDelivery({ directory: f.directories.delivery, passphrase, intent })).storage, "absent");
   const names = await readdir(join(directory, f.taskRef()));
   const restarted = await fixture(t, "restart", { root: f.root, values: f.values, taskRef: f.taskRef() });
@@ -280,6 +448,58 @@ test("synthetic typed task-local coverage refusal persists exact-head dispositio
   assert.equal(restarted.counts().finalSends, 0); assert.equal(restarted.finalTickets.length, 0);
   assert.deepEqual(await readdir(join(directory, f.taskRef())), names);
   assert.deepEqual(await readStandingHistoryTaskDisposition({ directory, passphrase, intent, ...heads }), disposition);
+});
+
+test("default finalizer persists a distinct report then delivers every part; restart never regenerates or resends", async t => {
+  const f = await fixture(t, "finalizer"), result = await runStandingWithPorts(f.input, f.ports);
+  assert.equal(result.status, "stopped", serviceEvidence(f, result));
+  assert.equal(f.events.filter(e => e === "final-report").length, 1);
+  assert.equal(f.events.filter(e => e === "final-report-review").length, 1);
+  assert.ok(f.events.indexOf("final-report-review") < f.events.indexOf("final-send"));
+  const intent = await f.readIntent();
+  const saved = await readStandingHistoryTaskDelivery({ directory: f.directories.delivery, passphrase, intent });
+  assert.equal(saved.delivery, "verified"); assert.equal(saved.partsTotal, 4); assert.equal(saved.verifiedParts, 4);
+  assert.equal(saved.descriptor!.body, f.finalReportBody);
+  assert.notEqual(saved.descriptor!.body, f.chosenSummary);
+  assert.equal(saved.descriptor!.parts!.filter(p => p.kind === "body").map(p => p.text).join(""), f.finalReportBody);
+  const restarted = await fixture(t, "restart", { root: f.root, values: f.values, taskRef: f.taskRef() });
+  const after = await runStandingWithPorts(restarted.input, restarted.ports);
+  assert.equal(after.status, "stopped", serviceEvidence(restarted, after));
+  assert.equal(restarted.counts().nativeTurns, 0); assert.equal(restarted.counts().finalSends, 0);
+});
+
+test("material-unavailable finalizer outcome preserves foreground and blocks only the unchanged report task across restart", async t => {
+  const f = await fixture(t, "no-report");
+  // The constructor/real-store fault is covered by the finalizer containment
+  // suite. Inject its typed outcome at the service boundary to exercise the
+  // actual disposition, progress, foreground and restart consumers.
+  const target = new URL("../src/standing-service.js?material-containment=" + Date.now(), import.meta.url).href;
+  const key = "__standingMaterialContainment";
+  Reflect.set(globalThis, key, f.input.historyFinalReport);
+  const stub = "data:text/javascript," + encodeURIComponent(`export async function finalizeStandingHistoryReport(input){await globalThis[${JSON.stringify(key)}](input);return {kind:'blocked',reason:'material-unavailable'};}`);
+  const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
+    if (context.parentURL === target && specifier === "./standing-history-final-report.js") return { url: stub, shortCircuit: true };
+    return nextResolve(specifier, context);
+  } });
+  let result: Awaited<ReturnType<typeof runStandingWithPorts>>;
+  try {
+    const service = await import(target) as typeof import("../src/standing-service.js");
+    hooks.deregister();
+    const { historyFinalReport: _hook, ...defaults } = f.input;
+    result = await service.runStandingWithPorts(defaults, f.ports);
+  } finally { hooks.deregister(); Reflect.deleteProperty(globalThis, key); }
+  assert.equal(result.status, "stopped", serviceEvidence(f, result)); assert.equal(result.lockPreserved, false); assert.equal(result.clientSettled, true);
+  assert.equal(f.counts().deliveryRefusals, 1); assert.equal(f.counts().finalSends, 0); assert.equal(f.counts().nativeTurns, f.counts().turnsAtRefusal);
+  assert.ok(f.events.indexOf("foreground:" + f.counts().laterPrimary) > f.events.indexOf("synthetic-coverage-refusal"));
+  const intent = await f.readIntent(), heads = await f.readHeads(), directory = join(f.input.stateDirectory, "history-tasks", "disposition");
+  const saved = await readStandingHistoryTaskDisposition({ directory, passphrase, intent, ...heads });
+  assert.equal(saved.storage, "ready"); if (saved.storage !== "ready") throw Error("missing disposition");
+  assert.equal(saved.disposition.reason, "report-required");
+  const restarted = await fixture(t, "restart", { root: f.root, values: f.values, taskRef: f.taskRef() });
+  const after = await runStandingWithPorts(restarted.input, restarted.ports);
+  assert.equal(after.status, "stopped", serviceEvidence(restarted, after)); assert.deepEqual(restarted.foreground, [200]);
+  assert.equal(restarted.counts().nativeTurns, 0); assert.equal(restarted.counts().finalSends, 0);
+  assert.deepEqual(await readStandingHistoryTaskDisposition({ directory, passphrase, intent, ...heads }), saved);
 });
 
 test("service sends exact 4096-byte summary and coverage on two fresh tickets; only both parts verify aggregate delivery", async t => {

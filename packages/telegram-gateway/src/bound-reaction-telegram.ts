@@ -1,3 +1,4 @@
+import { STANDING_INCOMING_TEXT_BYTES } from "./standing-context.js";
 import { types } from "node:util";
 import { Api, utils } from "telegram";
 import bigInt from "big-integer";
@@ -30,7 +31,7 @@ export class BoundReactionTelegramError extends Error {
 const absent = (value: unknown): boolean => value === undefined || value === null;
 const int = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0 && (value as number) < 2147483647;
 const long = (value: unknown): value is string => typeof value === "string" && /^[1-9]\d{0,18}$/.test(value) && BigInt(value) < 2n ** 63n;
-const text = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Buffer.byteLength(value, "utf8") <= 4096 &&
+const text = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Buffer.byteLength(value, "utf8") <= STANDING_INCOMING_TEXT_BYTES &&
   !value.includes("\0") && Buffer.from(value, "utf8").toString("utf8") === value;
 const emoji = (value: unknown): value is string => typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= 64 &&
   !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value) && Buffer.from(value, "utf8").toString("utf8") === value;

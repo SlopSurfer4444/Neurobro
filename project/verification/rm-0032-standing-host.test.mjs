@@ -9,14 +9,20 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { normalizeEpochOwnerRecord } from './rm-0032-standing-epoch-receipt.mjs';
 import { runInNewContext } from 'node:vm';
+import { pathToFileURL } from 'node:url';
 import { makeWorkerIntent, validateWorkerIntent, lockBytes, ownedLockPort, locateOwnedStaleLock,
   normalizeStandingResult, settledModelReceipt, verifyStandingBuild, readMetadata, MUTEX_SCRIPT, WINDOWS_CONTROLLERS_SCRIPT, statusWriter,
   reconcileStandingState, recoveryDisposition, classifyHostExit, preservePause, acquireHostMutex, publicHelper, prepareModel, BUILD } from './rm-0032-standing-host.mjs';
 const HASH = 'a'.repeat(64), TOKEN = 'b'.repeat(32);
+const digest = value => createHash('sha256').update(value).digest('hex');
 const historyModules = ['standing-scoped-epoch-session', 'standing-history-analysis-attempt-store', 'standing-history-analysis-planner',
   'standing-history-analysis-runtime', 'standing-history-analysis-step', 'standing-history-analysis-store', 'standing-history-analysis-view',
+  'standing-history-chronicle-cache', 'standing-history-chronicle-reuse-store', 'standing-history-parallel-analysis-runtime',
+    'standing-history-parallel-maintenance', 'standing-history-parallel-planner', 'standing-history-parallel-work-store', 'standing-history-period-chronicle',
+  'standing-history-period-chronicle-store', 'standing-history-period-chronicle-turn', 'standing-multiplex-epoch-wire', 'standing-parallel-epoch-session',
   'standing-history-read-runner', 'standing-history-read-step', 'standing-history-source-projection', 'standing-history-task-control-store',
-  'standing-history-task-delivery', 'standing-history-task-discovery', 'standing-history-task-disposition', 'standing-history-task-manager',
+  'standing-history-final-report-store', 'standing-history-final-report', 'standing-history-final-report-material',
+  'standing-history-task-delivery', 'standing-history-task-delivery-recovery', 'standing-history-task-discovery', 'standing-history-task-disposition', 'standing-history-task-manager',
   'standing-history-task-request', 'standing-history-task-runner', 'standing-history-task-runtime', 'standing-history-task-store', 'standing-history-task-tools',
   'standing-chronicle-note', 'standing-history-task-context', 'standing-history-task-memory',
   'standing-own-action-capture', 'standing-own-action-checkpoint', 'standing-own-action-memory', 'standing-own-action-projection',
@@ -72,6 +78,17 @@ test('result projection never retains raw code or private fields', () => {
   assert.equal(value.code, 'STANDING_BLOCKED'); assert.equal(JSON.stringify(value).includes('PRIVATE'), false);
   assert.throws(() => normalizeStandingResult({ status: 'stopped', clientSettled: 'yes', lockPreserved: false, verifiedReplies: 0 }));
 });
+test('wait diagnostics reject unknown values and non-wait diagnostics', () => {
+  const base = { status: 'blocked', clientSettled: true, lockPreserved: true, verifiedReplies: 0, failureStage: 'wait' };
+  for (const fields of [{ waitFailureOrigin: 'PRIVATE', waitFailureCode: 'storage' },
+    { waitFailureOrigin: 'participant-step', waitFailureCode: 'PRIVATE' },
+    { failureStage: 'model', waitFailureOrigin: 'participant-step', waitFailureCode: 'storage' }]) {
+    const value = normalizeStandingResult({ ...base, ...fields });
+    assert.equal(JSON.stringify(value).includes('PRIVATE'), false);
+    assert.equal(value.waitFailureCode, undefined);
+    if (fields.failureStage || fields.waitFailureOrigin === 'PRIVATE') assert.equal(value.waitFailureOrigin, undefined);
+  }
+});
 test('metadata reader bounds regular JSON without interpreting secrets or malformed files', t => {
   const dir = fixture(t), file = resolve(dir, 'invented.json'); writeFileSync(file, JSON.stringify(make()));
   assert.equal(readMetadata(file).pid, 123); assert.throws(() => readMetadata(file, 2));
@@ -87,9 +104,12 @@ test('status snapshots retain only fixed events and reply counts, atomically rep
 test('full build verifier checks dependencies and required standing entrypoints', t => {
   const dir = fixture(t), names = ['standing-host.mjs', 'standing-recovery.py', 'src/standing-service.js', 'src/windows-credential-vault.js', 'src/pilot-greeting.js',
     'model/rm-0032-standing-epoch-host.mjs', 'model/rm-0032-standing-epoch-runtime.mjs',
-    'model/rm-0032-standing-epoch-owner.mjs', 'model/rm-0032-standing-epoch-receipt.mjs',
+    'model/rm-0032-standing-parallel-runtime.mjs', 'model/history-parallel-native-pool.py',
+    'model/history-parallel-native-adapter.py', 'model/history-parallel-native-session.py', 'model/history-parallel-native-client.py',
+    'model/rm-0032-standing-epoch-owner.mjs', 'model/rm-0032-standing-epoch-receipt.mjs', 'model/rm-0032-standing-epoch-recovery.mjs',
     'src/standing-epoch-session.js', 'src/standing-epoch-wire.js', 'src/standing-native-turn.js', 'src/standing-context-restoration.js',
-    'src/self-history-reader.js', 'src/self-history-tool.js', 'src/standing-repository-tools.js', 'repository-snapshot.json', 'src/conversation-references.js',
+    'src/self-history-reader.js', 'src/self-history-tool.js', 'src/standing-chat-search.js',
+    'src/standing-observed-source-policy.js', 'src/standing-observed-source-reader.js', 'src/standing-repository-tools.js', 'repository-snapshot.json', 'src/conversation-references.js',
     'src/generated-image-receiver.js', 'src/standing-model-result.js', 'package.json', ...historyModules.map(name => `src/${name}.js`)];
   mkdirSync(resolve(dir, 'src')); mkdirSync(resolve(dir, 'model'));
   const manifest = names.map(path => { const bytes = Buffer.from('invented file ' + path); writeFileSync(resolve(dir, path), bytes);
@@ -110,24 +130,36 @@ test('pure model preparation imports the scoped session and validates scoped cap
   const files = {
     'package.json': JSON.stringify({type:'module'}), 'repository-snapshot.json': JSON.stringify({invented:true}),
     'model/rm-0032-standing-epoch-runtime.mjs': 'export function prepareStandingEpochRuntime(){throw new Error("runtime must not open");}',
+    'model/rm-0032-standing-parallel-runtime.mjs': 'export function prepareStandingParallelRuntime(){throw new Error("parallel runtime must not open");}',
     'model/rm-0032-standing-epoch-host.mjs': `import assert from 'node:assert/strict'; import {createHash} from 'node:crypto';
       export const SOURCE_NAMES={client:'invented-client.py'};
+      export const PARALLEL_SOURCE_NAMES={parallelPool:'history-parallel-native-pool.py',parallelAdapter:'history-parallel-native-adapter.py',parallelSession:'history-parallel-native-session.py',parallelClient:'history-parallel-native-client.py'};
       export function preparePacket(input){assert.deepEqual(Object.keys(input).sort(),['pins','sessionMode','sources','token']);
         assert.equal(input.sessionMode,'standing-scoped-epoch-v1');assert.equal(input.token,'0'.repeat(32));
         assert.deepEqual(input.sources,{client:'invented source'});assert.deepEqual(input.pins,{client:createHash('sha256').update('invented source').digest('hex')});}`,
     'model/invented-client.py':'invented source',
+    'model/history-parallel-native-pool.py':'invented pool', 'model/history-parallel-native-adapter.py':'invented adapter',
+    'model/history-parallel-native-session.py':'invented parallel session', 'model/history-parallel-native-client.py':'invented parallel client',
     'model/rm-0032-standing-epoch-receipt.mjs':'export function normalizeEpochOwnerRecord(){}',
     'src/standing-epoch-wire.js':'export function createEpochWire(){throw new Error("wire must not open");}',
     'src/standing-epoch-session.js':'export function isEpochTurnNotAdmitted(){return false;}',
-    'src/standing-scoped-epoch-session.js':'export function openStandingScopedEpochSession(){throw new Error("session must not open");}',
+    'src/standing-scoped-epoch-session.js':'export class StandingWorkerTurnNotAdmitted extends Error{}; export function openStandingScopedEpochSession(){throw new Error("session must not open");}',
+    'src/standing-parallel-epoch-session.js':'export function openStandingParallelEpochSession(){throw new Error("parallel session must not open");}',
+    'src/standing-history-source-projection.js':'export {};', 'src/standing-history-analysis-store.js':'export {};',
     'src/standing-repository-tools.js':`import assert from 'node:assert/strict';
       export function createRepositoryTools({snapshot,signal}){assert.deepEqual(snapshot,{invented:true});assert.equal(signal.aborted,false);
         return {async close(){snapshot.closed=true;}};}`,
   };
   for (const [name, value] of Object.entries(files)) writeFileSync(resolve(dir, name), value);
   const prepared = await prepareModel(dir);
-  assert.equal(prepared.openStandingScopedEpochSession.name, 'openStandingScopedEpochSession');
-  assert.equal(Object.hasOwn(prepared, 'openStandingEpochSession'), false);
+  assert.equal(prepared.openStandingEpochSession.name, 'openStandingScopedEpochSession');
+  assert.equal(prepared.openStandingScopedEpochSession, prepared.openStandingEpochSession);
+  const { StandingWorkerTurnNotAdmitted } = await import(pathToFileURL(resolve(dir, 'src/standing-scoped-epoch-session.js')).href);
+  assert.equal(prepared.isWorkerTurnNotAdmitted(new StandingWorkerTurnNotAdmitted()), true);
+  assert.equal(prepared.isWorkerTurnNotAdmitted(new Error('foreign')), false);
+  assert.equal(prepared.prepareRuntime.name, 'prepareStandingEpochRuntime');
+  assert.deepEqual(prepared.historyChronicleProducer, { model: 'gpt-6-astra;effort=medium',
+    promptVersion: digest('invented source'), projectionVersion: digest('export {};'), outputVersion: digest('export {};') });
   assert.equal(prepared.repositorySnapshot.closed, true);
   assert.deepEqual(readdirSync(dir).sort(), ['model','package.json','repository-snapshot.json','src']);
 });
@@ -145,7 +177,7 @@ test('V36 fixed public entrypoints couple scoped runtime with history service an
   assert.ok(prepare.includes('return prepareModel();'));
   for (const name of ['rm-0032-standing-host.mjs','rm-0032-standing-dialogues.mjs','rm-0032-standing-task.ps1']) {
     const text = readFileSync(new URL(name, import.meta.url), 'utf8');
-    assert.ok(text.replaceAll('\\','/').includes('C:/Neurobro/build'));
+    assert.ok(text.includes('telegram-standing-build-20260912-v36'));
     assert.equal(text.includes('20260910-v28'), false);
     if (name.endsWith('.mjs')) { assert.ok(text.includes('standing-build-v36.json')); assert.equal(text.includes('standing-build-v28.json'), false); }
   }

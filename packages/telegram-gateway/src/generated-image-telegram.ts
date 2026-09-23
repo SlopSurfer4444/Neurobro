@@ -1,3 +1,4 @@
+import { STANDING_INCOMING_TEXT_BYTES } from "./standing-context.js";
 import { createHash, randomBytes } from "node:crypto";
 import { Api, utils } from "telegram";
 import bigInt from "big-integer";
@@ -48,7 +49,7 @@ export function createGeneratedImageTelegramTransport(input: {
       !input.self.self || input.self.bot || input.self.deleted || input.self.id.toString() !== binding.accountId ||
       !(input.peer instanceof Api.InputPeerChat || input.peer instanceof Api.InputPeerChannel) || !samePeer(input.peer, binding.peerId) ||
       selected.chatId !== binding.peerId || !id(selected.messageId) || !long(selected.ownerId) || selected.ownerId === binding.accountId ||
-      typeof selected.text !== "string" || Buffer.byteLength(selected.text, "utf8") > 4096) return fail();
+      typeof selected.text !== "string" || Buffer.byteLength(selected.text, "utf8") > STANDING_INCOMING_TEXT_BYTES) return fail();
   // Copy the resolved peer so caller mutation cannot retarget an admitted upload.
   const peer = input.peer instanceof Api.InputPeerChat ? new Api.InputPeerChat({ chatId: bigInt(input.peer.chatId.toString()) }) :
     new Api.InputPeerChannel({ channelId: bigInt(input.peer.channelId.toString()), accessHash: bigInt(input.peer.accessHash.toString()) });

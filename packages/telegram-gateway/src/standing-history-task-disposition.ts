@@ -7,7 +7,7 @@ import { assertPilotPrivateDirectory } from "./pilot-outbox.js";
 import { decryptSession, encryptSession } from "./session-crypto.js";
 import { snapshotStandingHistoryTaskIntent, type StandingHistoryTaskIntent } from "./standing-history-task-store.js";
 
-export type StandingHistoryTaskDispositionReason = "coverage" | "stale" | "consumed-without-prepared" | "source-page-quota" | "overflow";
+export type StandingHistoryTaskDispositionReason = "coverage" | "stale" | "consumed-without-prepared" | "source-page-quota" | "report-required" | "overflow";
 export type StandingHistoryTaskDisposition = Readonly<{
   schema: "standing-history-task-disposition-v1"; reason: StandingHistoryTaskDispositionReason; sourceHead: string; analysisHead: string;
 }>;
@@ -21,7 +21,7 @@ export class StandingHistoryTaskDispositionError extends Error {
 }
 const fail = (code: StandingHistoryTaskDispositionError["code"]): never => { throw new StandingHistoryTaskDispositionError(code); };
 const DOMAIN = "DecadansNeurobro/standing-history-task-disposition/v1";
-const REASONS = ["coverage", "stale", "consumed-without-prepared", "source-page-quota", "overflow"] as const;
+const REASONS = ["coverage", "stale", "consumed-without-prepared", "source-page-quota", "report-required", "overflow"] as const;
 const MAX_PLAIN = 32768, MAX_CIPHER = 65536;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);

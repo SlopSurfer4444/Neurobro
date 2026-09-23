@@ -1,35 +1,57 @@
 # Neurobro
 
-**A Telegram group assistant with bounded conversation memory, tools, and optional initiative.**
+**A Telegram AI assistant that participates through a real user account over MTProto.**
 
-An experimental assistant developed through real group use. The project connects a Telegram user-account gateway to a model session running through Codex App Server in WSL. It handles replies, images, files, history tasks and Telegram actions while tracking whether operations actually completed.
+Neurobro connects a Telegram account to an agent runtime with conversation memory, tools and long-running tasks. It can respond to direct requests and replies, work with media, search conversations and optionally join a discussion on its own. **No BotFather bot or Telegram Bot API token is required for the account gateway.**
 
-[Русское описание](README.ru.md) · [Architecture](docs/architecture.md) · [Design notes](docs/design-notes.md) · [Testing](docs/testing.md) · [Publication scope](docs/publication.md)
+Built with AI coding agents, with author-led product design, architecture decisions, integration and testing in real Telegram groups. Used in 24/7 operation on Windows/WSL, with background startup, a windowless launcher and recovery mechanisms.
 
-## What is here
+[Русское описание](README.ru.md) · [Architecture](docs/architecture.md) · [Model isolation](docs/isolation.md) · [Design decisions](docs/design-notes.md) · [Testing](docs/testing.md) · [Publication scope](docs/publication.md)
 
-| Component | Role |
+## What it does
+
+| Capability | How it works |
 | --- | --- |
-| `packages/telegram-gateway` | TypeScript/GramJS gateway, conversation selection, bounded context, encrypted journals, history tasks, tools, delivery and recovery logic |
-| `project/verification` | Python/Node model-session bridge, image handling, process supervision, offline tests and Windows runtime reference sources |
-| `crates` | Our experimental Windows Rust runner, native observer and launcher/hardening components |
-| `packages/rm0032-phase3-runner` | Paired TypeScript contracts, fixtures and tests for the experimental Rust components |
+| Conversation participation | Direct requests and replies, continuation assessment, optional initiative, cooldowns and explicit decisions to remain silent |
+| Context and memory | Recent messages, reply anchors, the assistant's own actions, saved notes/preferences and bounded context assembly |
+| History and search | Query/date search, surrounding context, paginated history and long-period analysis with recorded coverage |
+| Media and Telegram tools | Image input/generation integration, file and media delivery, participants, polls, reactions and scoped profile/group actions |
+| Long-running work | Saved intermediate analysis, parallel work where admitted, separate report drafting/review and multipart result delivery |
+| Recovery | Encrypted state, durable action records, process settlement and reconciliation of uncertain outcomes before replay |
+| Separate chat roles | An interactive group and an explicitly bound community source with read-only access; isolated conversation state |
 
-The Rust **Codex App Server is an external dependency**, not an implementation authored in this repository. The active model bridge is Python/Node. Our own Rust crates belong to an earlier Windows native-isolation track and are kept as engineering reference, not presented as the active WSL server.
+Tool availability depends on the configured runtime, provider and Telegram account permissions. Telegram API support, an implemented tool and a verified live scenario are distinct; [testing](docs/testing.md) records the checks available in this publication.
 
-## Capabilities implemented
+## Why a user account?
 
-- Direct requests, replies, optional conversational continuations and initiative with cooldowns and silence decisions.
-- Bounded recent context, persisted own-action facts and incremental history-analysis tasks with recorded coverage.
-- Image input and generation handling; artifact delivery; profile/group actions, participants, polls and reactions through scoped tools.
-- Encrypted local state, operation records, delivery readback and explicit unknown outcomes instead of blind replay.
-- Process/session settlement and recovery; a Windows GUI-subsystem launcher that avoids allocating a visible terminal.
+The gateway uses **GramJS and MTProto**, authenticating a Telegram user account with application credentials and a saved session. This allows account-oriented workflows such as reading accessible history, searching conversations and interacting with Telegram objects through scoped tools. Permissions and peer bindings constrain where the assistant may act.
 
-Individual live outcomes and offline checks are different evidence. Features were exercised in a real group, but this is **an experimental system, not a claim of production readiness or guaranteed 24/7 availability**. Social timing, universal retrieval of old media, portable deployment and broader model routing remain incomplete.
+It is designed to use a dedicated assistant account. A read-only source is a separate role from the group where the assistant replies; model instructions alone are not the write boundary.
 
-## Run the offline gateway checks
+## Architecture
 
-Requirements: Node.js 24.15 or newer compatible 24.x, npm 11, Git, and Python 3.12+ for the image-collector integration test. On Windows, use a real Git executable on PATH; a `.cmd` shim cannot be passed directly to Node's `execFile`.
+```mermaid
+flowchart LR
+  TG[Telegram user account / MTProto] <--> GW[TypeScript + GramJS gateway]
+  GW <--> STATE[Encrypted memory and task state]
+  GW <--> HOST[Node host + Python bridge in WSL]
+  HOST <--> CODEX[External Codex App Server]
+  CODEX <--> MODEL[Cloud model]
+  SOURCE[Bound read-only community] --> GW
+```
+
+| Source | Role |
+| --- | --- |
+| `packages/telegram-gateway` | Conversation routing, memory, search, Telegram tools, history analysis, delivery and recovery |
+| `project/verification` | Python/Node model-session bridge, supervision, offline tests and Windows runtime reference sources |
+| `crates` | Original Windows Rust runner, native observer and launcher/hardening experiments |
+| `packages/rm0032-phase3-runner` | TypeScript contracts, fixtures and checks paired with the Rust components |
+
+**Codex App Server is an external Rust dependency.** The active model bridge in this project is Python/Node; the original Rust crates cover a separate Windows native-isolation track. The WSL environment hosts the runtime, not the model weights.
+
+## Try the offline checks
+
+Requirements: Node.js 24.15 or a compatible newer 24.x, npm 11, Git and Python 3.12+. On Windows, Git must resolve to an executable rather than a `.cmd` shim.
 
 ```sh
 cd packages/telegram-gateway
@@ -37,16 +59,16 @@ npm ci --ignore-scripts
 npm test
 ```
 
-If Python is not available as `python`, set `NEUROBRO_TEST_PYTHON` to its executable path. These tests use synthetic data and mocked Telegram/model boundaries; no Telegram credentials or live model session are required.
+Set `NEUROBRO_TEST_PYTHON` if Python is not available as `python`. Tests use synthetic messages and temporary state; Telegram credentials and a live model are not required.
 
-The full WSL deployment is **not a one-command installer in this publication**. Runtime reference files retain version-specific integrity contracts and require a separately configured environment, account binding and dependency installation. Do not execute historical operators as setup instructions. See [testing and deployment boundaries](docs/testing.md).
+A live installation additionally needs a compatible model runtime, WSL environment, Telegram application credentials, account login and explicit chat bindings. This repository publishes sources and runtime references, rather than a one-command deployment image. See [deployment boundaries](docs/testing.md).
 
-## Development and provenance
+## Developed with AI agents
 
-Developed iteratively with AI coding agents, with owner-led requirements, live testing and review.
+AI coding agents were used throughout implementation, test development and code review. The project author defined the product behavior, directed and revised architectural choices, coordinated development and accepted results through integration checks and real group use. This is part of the development method, not a claim that every line was hand-written.
 
-This is a source-only snapshot of the project. It contains no original Git history, production chat exports, credentials, session files, installed binaries or WSL image.
+## Source and licensing
 
-## Licensing
+The public repository contains curated source and synthetic fixtures. Private chat history, participant data, credentials, operational records and the original private Git history are excluded.
 
-No project-wide license has been selected for the original source in this publication. Third-party dependencies retain their own licenses; they are referenced by manifests/lockfiles and are not vendored. See [third-party notes](THIRD_PARTY.md).
+No project-wide license has been selected for the original source. Third-party dependencies retain their own licenses and are not vendored. See [THIRD_PARTY.md](THIRD_PARTY.md).

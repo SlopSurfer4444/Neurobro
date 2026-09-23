@@ -75,3 +75,16 @@ test("named registration rejects empty, duplicate and accessor entries before an
   assert.throws(() => createStandingNamedToolDispatcher([hostile as EpochExtraTool]), StandingToolDispatchError);
   assert.equal(accessed, 0);
 });
+
+ test("large material result requires explicit analysis purpose and retains escaped bytes", async () => {
+  const size=1088*1024, text="{}"+"\t".repeat(size-2);
+  const tools=[{name:names[0]!,async call(){return {success:true,contentItems:[{type:"inputText",text}]};}}];
+  const analysis=createStandingNamedToolDispatcher(tools,"history-analysis");
+  const value=await analysis.call(names[0]!,{},scope());
+  assert.equal(value.contentItems[0].text,text);
+  assert.ok(Buffer.byteLength(JSON.stringify(value))>2*1024*1024);
+  await assert.rejects(createStandingNamedToolDispatcher(tools).call(names[0]!,{},scope()),StandingToolDispatchError);
+  await assert.rejects(createStandingToolDispatcher({async call(){return {}; }},tools).call(names[0]!,{},scope()),StandingToolDispatchError);
+  const over=createStandingNamedToolDispatcher([{name:names[0]!,async call(){return {success:true,contentItems:[{type:"inputText",text:text+" "}]};}}],"history-analysis");
+  await assert.rejects(over.call(names[0]!,{},scope()),StandingToolDispatchError);
+});

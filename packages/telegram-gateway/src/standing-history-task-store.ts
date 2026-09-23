@@ -8,8 +8,10 @@ import { decryptSession, encryptSession } from "./session-crypto.js";
 import { snapshotSelfHistoryTaskCheckpoint, type SelfHistoryTaskCheckpoint, type SelfHistoryTaskPage, type SelfHistoryPage,
   type SelfHistoryMessage, type SelfHistoryTaskSource } from "./self-history-reader.js";
 
+export type StandingHistoryTaskObservedSource = Readonly<{ kind: "observed-source"; sourceRef: "community"; workspaceId: string; peerId: string }>;
 export type StandingHistoryTaskIntent = Readonly<{ schema: "standing-history-task-v1"; taskId: string; accountId: string; chatId: string;
-  requesterId: string; primaryMessageId: number; fromDate: number; toDate: number; timezone: string; objective: string }>;
+  requesterId: string; primaryMessageId: number; fromDate: number; toDate: number; timezone: string; objective: string;
+  source?: StandingHistoryTaskObservedSource }>;
 export type StandingHistoryTaskStatus = Readonly<{ storage: "ready" | "tail-refused";
   readProgress: Readonly<{ committedPages: number; checkpoint: SelfHistoryTaskCheckpoint; chainHash: string }>;
   modelProgress: "not-recorded"; limits: Readonly<{ maximumPages: number; maximumPageBytes: number; maximumCiphertextBytes: number; pageQuotaReached: boolean }> }>;
@@ -32,6 +34,7 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const version = (s: BigIntStats) => [s.dev, s.ino, s.size, s.mtimeNs, s.ctimeNs, s.nlink].join(":");
 const sameDirectory = (a: BigIntStats, b: BigIntStats) => a.dev === b.dev && a.ino === b.ino;
 const positive = (v: unknown): v is string => typeof v === "string" && /^[1-9]\d{0,19}$/u.test(v);
+const signedPeer = (v: unknown): v is string => typeof v === "string" && /^-?[1-9]\d{0,19}$/u.test(v);
 const id = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) > 0 && Number(v) <= 2147483647;
 const date = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) > 0 && Number(v) < 2147483647;
 const natural = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) >= 0;
@@ -50,25 +53,41 @@ function array(value: unknown, maximum: number): unknown[] {
   for (let n = 0; n < length; n++) { const d = ds[String(n)]; if (!d || !("value" in d)) return fail("input"); result.push(d.value); }
   return result;
 }
+export function snapshotStandingHistoryTaskObservedSource(value: unknown): StandingHistoryTaskObservedSource {
+  const source = data(value, ["kind", "sourceRef", "workspaceId", "peerId"]);
+  if (source.kind !== "observed-source" || source.sourceRef !== "community" || typeof source.workspaceId !== "string" ||
+      !/^[a-z][a-z0-9-]{0,63}$/u.test(source.workspaceId) || typeof source.peerId !== "string" || !/^-[1-9]\d{0,19}$/u.test(source.peerId)) return fail("input");
+  return Object.freeze({ kind: "observed-source", sourceRef: "community", workspaceId: source.workspaceId, peerId: source.peerId });
+}
 function intentCopy(value: unknown): StandingHistoryTaskIntent {
-  const i = data(value, ["schema", "taskId", "accountId", "chatId", "requesterId", "primaryMessageId", "fromDate", "toDate", "timezone", "objective"]);
+  const i = data(value, ["schema", "taskId", "accountId", "chatId", "requesterId", "primaryMessageId", "fromDate", "toDate", "timezone", "objective"], ["source"]);
   if (i.schema !== "standing-history-task-v1" || typeof i.taskId !== "string" || !/^htask_[0-9a-f]{48}$/u.test(i.taskId) || !positive(i.accountId) || !positive(i.requesterId) ||
       typeof i.chatId !== "string" || !/^-[1-9]\d{0,19}$/u.test(i.chatId) || !id(i.primaryMessageId) || !date(i.fromDate) || !date(i.toDate) || i.fromDate > i.toDate ||
       !text(i.timezone, 64) || !/^[A-Za-z0-9_+/-]+$/u.test(i.timezone) || !text(i.objective, 4096)) return fail("input");
+  const source = Object.hasOwn(i, "source") ? snapshotStandingHistoryTaskObservedSource(i.source) : undefined;
+  if (source?.peerId === i.chatId) return fail("input");
   try { new Intl.DateTimeFormat("en", { timeZone: i.timezone }); } catch { return fail("input"); }
   return Object.freeze({ schema: i.schema, taskId: i.taskId, accountId: i.accountId, chatId: i.chatId, requesterId: i.requesterId,
-    primaryMessageId: i.primaryMessageId, fromDate: i.fromDate, toDate: i.toDate, timezone: i.timezone, objective: i.objective });
+    primaryMessageId: i.primaryMessageId, fromDate: i.fromDate, toDate: i.toDate, timezone: i.timezone, objective: i.objective,
+    ...(source === undefined ? {} : { source }) });
 }
 export { intentCopy as snapshotStandingHistoryTaskIntent };
-const initial = (i: StandingHistoryTaskIntent) => snapshotSelfHistoryTaskCheckpoint({ schema: "self-history-task-checkpoint-v1", accountId: i.accountId, chatId: i.chatId,
+export const standingHistoryTaskSourcePeerId = (value: StandingHistoryTaskIntent): string => {
+  const intent = intentCopy(value); return intent.source?.peerId ?? intent.chatId;
+};
+const initial = (i: StandingHistoryTaskIntent) => snapshotSelfHistoryTaskCheckpoint({ schema: "self-history-task-checkpoint-v1", accountId: i.accountId, chatId: standingHistoryTaskSourcePeerId(i),
   fromDate: i.fromDate, toDate: i.toDate, offsetId: 0, lastDate: i.toDate, oldestDate: null, newestDate: null, undated: 0, pages: 0, inexact: false, upperBoundMessageId: null, status: "more" });
 const limitations: SelfHistoryPage["limitations"] = Object.freeze(["text-only", "not-a-full-archive", "deleted-or-hidden-content-not-recoverable", "edits-may-change-between-pages"]);
 
 /** Snapshot the reader's whole inert result before I/O. Raw source identities
  * and public rows are validated together; a model summary is never source proof. */
-export function snapshotStandingHistoryTaskPage(value: unknown): SelfHistoryTaskPage {
+export function snapshotStandingHistoryTaskPage(value: unknown, expectedIntent?: StandingHistoryTaskIntent): SelfHistoryTaskPage {
   const v = data(value, ["page", "sources", "beforeCheckpoint", "nextCheckpoint"]), before = snapshotSelfHistoryTaskCheckpoint(v.beforeCheckpoint), next = snapshotSelfHistoryTaskCheckpoint(v.nextCheckpoint);
   if (before.status !== "more" || before.accountId !== next.accountId || before.chatId !== next.chatId || before.fromDate !== next.fromDate || before.toDate !== next.toDate || before.inexact && !next.inexact) return fail("input");
+  if (expectedIntent !== undefined) {
+    const intent = intentCopy(expectedIntent);
+    if (before.accountId !== intent.accountId || before.chatId !== standingHistoryTaskSourcePeerId(intent) || before.fromDate !== intent.fromDate || before.toDate !== intent.toDate) return fail("binding");
+  }
   const p = data(v.page, ["schema", "fromDate", "toDate", "messages", "cursor", "hasMore", "status", "coverage", "excluded", "limitations"]),
     c = data(p.coverage, ["scope", "oldestExaminedDate", "newestExaminedDate", "traversalComplete", "undatedEntries", "pages"]),
     x = data(p.excluded, ["nonText", "invalidText", "unavailable", "outsidePeriod"]);
@@ -77,12 +96,19 @@ export function snapshotStandingHistoryTaskPage(value: unknown): SelfHistoryTask
       c.traversalComplete !== (["lower-bound-reached", "empty-page"].includes(next.status) && next.undated === 0 && !next.inexact) ||
       !same(array(p.limitations, 4), limitations) || Object.values(x).some(n => !natural(n) || n > 100)) return fail("input");
   const messages = array(p.messages, 100).map(value => {
-    const m = data(value, ["ref", "authorRef", "author", "displayName", "date", "editedAt", "replyRef", "replyUnavailable", "text"]);
+    const m = data(value, ["ref", "authorRef", "author", "displayName", "date", "editedAt", "replyRef", "replyUnavailable", "text"], ["forwarded"]);
     if (typeof m.ref !== "string" || !/^m_[0-9a-f]{24}$/u.test(m.ref) || typeof m.authorRef !== "string" || !(m.authorRef === "neurobro" || /^a_[0-9a-f]{24}$/u.test(m.authorRef)) ||
         !["self", "user", "bot", "unknown"].includes(m.author as string) || !text(m.displayName, 512) || !date(m.date) || m.date < before.fromDate || m.date > before.toDate ||
         !(m.editedAt === null || date(m.editedAt)) || !(m.replyRef === null || typeof m.replyRef === "string" && /^m_[0-9a-f]{24}$/u.test(m.replyRef)) ||
-        typeof m.replyUnavailable !== "boolean" || m.replyRef !== null && m.replyUnavailable || !text(m.text, 4096)) return fail("input");
-    return Object.freeze(m) as unknown as SelfHistoryMessage;
+        typeof m.replyUnavailable !== "boolean" || m.replyRef !== null && m.replyUnavailable || !text(m.text, 16384)) return fail("input");
+    let forwarded: Readonly<{ originalDate: number; sourceName: string | null; interpretation: "quoted-source-not-request" }> | undefined;
+    if (Object.hasOwn(m, "forwarded")) {
+      const f = data(m.forwarded, ["originalDate", "sourceName", "interpretation"]);
+      if (!date(f.originalDate) || !(f.sourceName === null || text(f.sourceName, 128)) || f.interpretation !== "quoted-source-not-request") return fail("input");
+      forwarded = Object.freeze({ originalDate: f.originalDate, sourceName: f.sourceName as string | null, interpretation: "quoted-source-not-request" });
+    }
+    return Object.freeze({ ref: m.ref, authorRef: m.authorRef, author: m.author, displayName: m.displayName, date: m.date, editedAt: m.editedAt,
+      replyRef: m.replyRef, replyUnavailable: m.replyUnavailable, text: m.text, ...(forwarded === undefined ? {} : { forwarded }) }) as unknown as SelfHistoryMessage;
   });
   const byRef = new Map(messages.map(m => [m.ref, m])); if (byRef.size !== messages.length) return fail("input");
   const counts = { nonText: 0, invalidText: 0, unavailable: 0, outsidePeriod: 0 }, included: string[] = [];
@@ -98,7 +124,7 @@ export function snapshotStandingHistoryTaskPage(value: unknown): SelfHistoryTask
     else { lastDate = s.date; oldest = oldest === null ? s.date : Math.min(oldest, s.date); newest = newest === null ? s.date : Math.max(newest, s.date); }
     if (s.disposition === "included") {
       const m = typeof s.messageRef === "string" ? byRef.get(s.messageRef) : undefined;
-      if (!m || !positive(s.authorId) || m.date !== s.date || (m.author === "self") !== (s.authorId === before.accountId) || m.authorRef === "neurobro" && (m.author !== "self" || s.authorId !== before.accountId) ||
+      if (!m || !signedPeer(s.authorId) || m.date !== s.date || (m.author === "self") !== (s.authorId === before.accountId) || m.authorRef === "neurobro" && (m.author !== "self" || s.authorId !== before.accountId) ||
           (m.replyRef !== null) !== Object.hasOwn(s, "replyToMessageId") || Object.hasOwn(s, "replyToMessageId") && (!id(s.replyToMessageId) || s.replyToMessageId >= s.messageId)) return fail("input");
       if (authorRefs.has(s.authorId) && authorRefs.get(s.authorId) !== m.authorRef || authorIds.has(m.authorRef) && authorIds.get(m.authorRef) !== s.authorId) return fail("input");
       authorRefs.set(s.authorId, m.authorRef); authorIds.set(m.authorRef, s.authorId); messageRefs.set(s.messageId, m.ref); messageIds.set(m.ref, s.messageId);
@@ -182,7 +208,7 @@ export async function openStandingHistoryTaskStore(input: Readonly<{ directory: 
   const decode = (value: unknown, index: number, previousHash: string, before: SelfHistoryTaskCheckpoint): { hash: string; result: SelfHistoryTaskPage } => {
     const e = data(value, ["domain", "taskId", "kind", "intentHash", "index", "previousHash", "result"]);
     if (e.domain !== DOMAIN || e.taskId !== intent.taskId || e.kind !== "page" || e.intentHash !== intentHash || e.index !== index || e.previousHash !== previousHash) return fail("binding");
-    const result = snapshotStandingHistoryTaskPage(e.result); if (!same(result.beforeCheckpoint, before)) return fail("conflict");
+    const result = snapshotStandingHistoryTaskPage(e.result, intent); if (!same(result.beforeCheckpoint, before)) return fail("conflict");
     return { result, hash: hash({ domain: DOMAIN, taskId: intent.taskId, kind: "page", intentHash, index, previousHash, result }) };
   };
   const status = (): StandingHistoryTaskStatus => Object.freeze({ storage: tail ? "tail-refused" : "ready", readProgress: Object.freeze({ committedPages: pages.length, checkpoint, chainHash }),
@@ -211,7 +237,7 @@ export async function openStandingHistoryTaskStore(input: Readonly<{ directory: 
   };
   return Object.freeze<StandingHistoryTaskStore>({
     async appendPage(value) {
-      const request = data(value, ["expectedCheckpoint", "result"]), expected = snapshotSelfHistoryTaskCheckpoint(request.expectedCheckpoint), result = snapshotStandingHistoryTaskPage(request.result);
+      const request = data(value, ["expectedCheckpoint", "result"]), expected = snapshotSelfHistoryTaskCheckpoint(request.expectedCheckpoint), result = snapshotStandingHistoryTaskPage(request.result, intent);
       return operation(async () => {
         if (tail) return fail("tail"); if (pages.length >= MAX_PAGES) return fail("limit");
         if (!same(expected, checkpoint) || !same(result.beforeCheckpoint, checkpoint)) return fail("conflict");

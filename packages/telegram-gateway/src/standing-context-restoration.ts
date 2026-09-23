@@ -1,6 +1,7 @@
 import type { ConversationReferences } from "./conversation-references.js";
 import type { PilotBinding, PilotPrimary } from "./pilot-telegram-adapter.js";
 import type { JournalDialogue, StandingDialogueJournal } from "./standing-dialogue-journal.js";
+import { STANDING_INCOMING_TEXT_BYTES } from "./standing-context.js";
 
 export type RestoredDialogue = Readonly<{
   provenance: "verified-model-outcome-in-selected-dialogue-journal";
@@ -65,7 +66,7 @@ export async function readStandingContextRestoration(input: {
   const owner: Owner = { references: input.references, primary: Object.freeze({ ...input.primary }),
     signal: input.signal, accountId: input.binding.accountId };
   if (owner.primary.chatId !== input.binding.peerId || !validId(owner.primary.messageId) ||
-      !text(owner.primary.text, 4096)) return refuse();
+      !text(owner.primary.text, STANDING_INCOMING_TEXT_BYTES)) return refuse();
   checkOwner(owner);
   const finish = (value: StandingContextRestoration) => {
     checkOwner(owner); Object.freeze(value.dialogues); Object.freeze(value.operationalFacts);
@@ -86,7 +87,7 @@ export async function readStandingContextRestoration(input: {
   for (const row of result.dialogues) {
     const p = row?.question?.primary;
     if (!p || p.chatId !== owner.primary.chatId || !validId(p.messageId) || seen.has(p.messageId) ||
-        !/^[1-9]\d{0,19}$/.test(p.ownerId) || p.ownerId === owner.accountId || !text(p.text, 4096) ||
+        !/^[1-9]\d{0,19}$/.test(p.ownerId) || p.ownerId === owner.accountId || !text(p.text, STANDING_INCOMING_TEXT_BYTES) ||
         row.key !== String(p.messageId).padStart(10, "0") || !positive(row.recordedAt)) return refuse();
     seen.add(p.messageId);
     if (!row.outcome) { if (row.status !== "pending") return refuse(); continue; }

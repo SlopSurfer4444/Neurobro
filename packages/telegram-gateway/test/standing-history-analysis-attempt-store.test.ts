@@ -1,5 +1,6 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -8,7 +9,7 @@ import { encryptSession, decryptSession } from "../src/session-crypto.js";
 import { openStandingHistoryTaskStore, type StandingHistoryTaskIntent } from "../src/standing-history-task-store.js";
 import { openStandingHistoryAnalysisStore, type StandingHistoryAnalysisOutput } from "../src/standing-history-analysis-store.js";
 import { projectStandingHistorySource } from "../src/standing-history-source-projection.js";
-import { openStandingHistoryAnalysisAttemptStore } from "../src/standing-history-analysis-attempt-store.js";
+import { openStandingHistoryAnalysisAttemptStore, isStandingHistoryAnalysisNotAdmitted, STANDING_HISTORY_ANALYSIS_MAX_NOT_ADMITTED, isStandingHistoryAnalysisRetryableNoOutput } from "../src/standing-history-analysis-attempt-store.js";
 import type { SelfHistoryTaskCheckpoint, SelfHistoryTaskPage } from "../src/self-history-reader.js";
 
 type Store = Awaited<ReturnType<typeof openStandingHistoryAnalysisAttemptStore>>;
@@ -54,6 +55,222 @@ async function leafPlan(f: Awaited<ReturnType<typeof fixture>>, pageIndex = 1) {
 }
 async function files(directory: string) { return Promise.all((await readdir(directory)).sort().map(async name => [name, await readFile(join(directory, name), "utf8")])); }
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+
+const admissionBinding = (i: number) => ({ epochId: i.toString(16).padStart(32, "0"), requestRef: "request-" + i, purpose: "history-analysis" as const });
+const successorSettlement = (nativeBinding: ReturnType<typeof admissionBinding>) => ({ schema: "standing-analysis-owner-settlement-v1" as const,
+  nativeBinding, resourcesSettled: true as const, persisted: true as const, replacementReady: true as const, modelOutcome: "not-proven" as const });
+
+for (const outcome of ["unknown", "missing"] as const) test(`${outcome} outcome stays immutable through explicit settled-owner successor and cold reopen`, async t => {
+  const f = await fixture(t), { plan } = await leafPlan(f), store = await opened(f, t);
+  const first = await store.reserve({ plan, nativeBinding: admissionBinding(1) });
+  if (outcome === "unknown") await store.recordModelOutcome({ attemptRef: first.attemptRef, outcome });
+  const original = await files(f.slot); await store.close(); const reopened = await opened(f, t, "open");
+  assert.deepEqual(await reopened.readRetryablePlan(first.attemptRef), plan);
+  assert.equal(isStandingHistoryAnalysisRetryableNoOutput((await reopened.status()).last), true);
+  assert.equal((await reopened.status()).last?.consecutiveNoOutput, 1);
+  await assert.rejects(reopened.reserve({ plan, nativeBinding: admissionBinding(2) }), /CONSUMED/);
+  let verified = 0;
+  const next = await reopened.reserveSuccessor({ attemptRef: first.attemptRef, plan, nativeBinding: admissionBinding(2), verifyOwnerSettled: async b => {
+    assert.deepEqual(b, admissionBinding(1)); verified++; return successorSettlement(b);
+  } });
+  assert.equal(verified, 1); assert.notEqual(next.attemptRef, first.attemptRef); assert.equal(next.planHash, first.planHash);
+  const after = new Map(await files(f.slot) as [string, string][]); for (const [name, bytes] of original) assert.equal(after.get(name!), bytes);
+  assert.equal(after.has("attempt-000001.native.enc"), outcome === "unknown");
+  const record = JSON.parse(await decryptSession(after.get("attempt-000002.reservation.enc")!, f.binding.passphrase));
+  assert.equal(record.continuation.originalOutcome, outcome);
+  assert.equal(record.continuation.predecessorAttemptRef, first.attemptRef);
+  assert.equal(record.continuation.originalNativeHash === null, outcome === "missing");
+  assert.deepEqual(record.continuation.ownerSettlement, successorSettlement(admissionBinding(1)));
+  await reopened.close(); const cold = await opened(f, t, "open");
+  assert.equal((await cold.status()).storage, "ready"); assert.equal((await cold.status()).last?.consecutiveNoOutput, 2);
+  assert.equal((await cold.status()).modelReplayAllowed, false);
+  await assert.rejects(cold.prepare({ attemptRef: first.attemptRef, output: { summary: "late old output", claims: [] } }), /CONSUMED/);
+  await assert.rejects(cold.recordModelOutcome({ attemptRef: first.attemptRef, outcome: "observed" }), /CONSUMED/);
+});
+
+for (const outcomes of [["unknown", "missing", "refused"], ["missing", "unknown", "observed"], ["observed", "refused", "missing"]] as const)
+test(`mixed ${outcomes.join("/")} reservations exhaust exactly three attempts including crash before receipt`, async t => {
+  const f = await fixture(t), { plan } = await leafPlan(f); let store = await opened(f, t), prior: string | undefined;
+  for (const [index, outcome] of outcomes.entries()) {
+    const nativeBinding = admissionBinding(index + 1), request = { plan, nativeBinding };
+    const result = prior ? await store.reserveSuccessor({ ...request, attemptRef: prior, verifyOwnerSettled: async b => successorSettlement(b) }) : await store.reserve(request);
+    prior = result.attemptRef;
+    if (outcome !== "missing") await store.recordModelOutcome({ attemptRef: prior, outcome });
+    await store.close(); store = await opened(f, t, "open");
+    assert.equal((await store.status()).storage, "ready"); assert.equal((await store.status()).last?.consecutiveNoOutput, index + 1);
+  }
+  const before = await files(f.slot); let called = false;
+  await assert.rejects(store.reserveSuccessor({ attemptRef: prior!, plan, nativeBinding: admissionBinding(4), verifyOwnerSettled: async b => { called = true; return successorSettlement(b); } }), /LIMIT/);
+  await assert.rejects(store.reserve({ plan, nativeBinding: admissionBinding(4) }));
+  assert.equal(called, false); assert.deepEqual(await files(f.slot), before);
+});
+
+test("explicit successor refuses changed plan, reused owner, unbound or contradictory output and nonexact settlement", async t => {
+  const f = await fixture(t), { plan } = await leafPlan(f), store = await opened(f, t);
+  const first = await store.reserve({ plan, nativeBinding: admissionBinding(1) });
+  await store.recordModelOutcome({ attemptRef: first.attemptRef, outcome: "unknown" });
+  const before = await files(f.slot), base = { attemptRef: first.attemptRef, plan, nativeBinding: admissionBinding(2), verifyOwnerSettled: async (b: ReturnType<typeof admissionBinding>) => successorSettlement(b) };
+  for (const key of ["sourceHead", "expectedHead", "modelInputHash"] as const) await assert.rejects(store.reserveSuccessor({ ...base, plan: { ...plan, [key]: "b".repeat(64) } }), /CONFLICT/);
+  for (const key of ["epochId", "requestRef"] as const) await assert.rejects(store.reserveSuccessor({ ...base, nativeBinding: { ...base.nativeBinding, [key]: admissionBinding(1)[key] } }), /BINDING/);
+  for (const change of [{ resourcesSettled: false }, { persisted: false }, { replacementReady: false }, { modelOutcome: "observed" }, { nativeBinding: admissionBinding(3) }]) {
+    await assert.rejects(store.reserveSuccessor({ ...base, verifyOwnerSettled: async b => ({ ...successorSettlement(b), ...change }) as ReturnType<typeof successorSettlement> }), /BINDING/);
+  }
+  assert.deepEqual(await files(f.slot), before);
+  for (const mode of ["unbound", "prepared", "node"] as const) {
+    const other = await fixture(t), { plan: p, output } = await leafPlan(other), s = await opened(other, t);
+    const r = await s.reserve({ plan: p, ...(mode === "unbound" ? {} : { nativeBinding: admissionBinding(1) }) });
+    if (mode !== "unbound") await s.prepare({ attemptRef: r.attemptRef, output });
+    if (mode === "node") await s.commitPrepared({ attemptRef: r.attemptRef });
+    await s.recordModelOutcome({ attemptRef: r.attemptRef, outcome: "unknown" });
+    let verified = false;
+    await assert.rejects(s.reserveSuccessor({ attemptRef: r.attemptRef, plan: p, nativeBinding: admissionBinding(2), verifyOwnerSettled: async b => { verified = true; return successorSettlement(b); } }), /CONSUMED/);
+    assert.equal(verified, false);
+  }
+});
+
+for (const race of ["prepare", "head", "abort", "tail"] as const) test(`settlement ${race} race cannot append a successor`, async t => {
+  const f = await fixture(t), { plan, output } = await leafPlan(f), controller = new AbortController();
+  const store = await openStandingHistoryAnalysisAttemptStore({ ...args(f), mode: "create", signal: controller.signal }); t.after(() => store.close());
+  const first = await store.reserve({ plan, nativeBinding: admissionBinding(1) });
+  await assert.rejects(store.reserveSuccessor({ attemptRef: first.attemptRef, plan, nativeBinding: admissionBinding(2), verifyOwnerSettled: async b => {
+    if (race === "prepare") await store.prepare({ attemptRef: first.attemptRef, output });
+    if (race === "head") await f.analysis.appendLeaf({ expectedHead: plan.expectedHead, inputs: plan.kind === "leaf" ? plan.inputs : [], output });
+    if (race === "abort") controller.abort();
+    if (race === "tail") await writeFile(join(f.slot, "unexpected.bin"), "corrupt tail");
+    return successorSettlement(b);
+  } }));
+  assert.equal((await readdir(f.slot)).includes("attempt-000002.reservation.enc"), false);
+});
+
+for (const tamper of ["outcome", "owner", "settlement", "remove"] as const) test(`cold reopen refuses ${tamper} continuation tampering`, async t => {
+  const f = await fixture(t), { plan } = await leafPlan(f), store = await opened(f, t);
+  const first = await store.reserve({ plan, nativeBinding: admissionBinding(1) });
+  await store.reserveSuccessor({ attemptRef: first.attemptRef, plan, nativeBinding: admissionBinding(2), verifyOwnerSettled: async b => successorSettlement(b) });
+  await store.close(); const path = join(f.slot, "attempt-000002.reservation.enc");
+  const record = JSON.parse(await decryptSession(await readFile(path, "utf8"), f.binding.passphrase));
+  if (tamper === "outcome") record.continuation.originalOutcome = "observed";
+  if (tamper === "owner") record.continuation.nativeBinding = admissionBinding(3);
+  if (tamper === "settlement") record.continuation.ownerSettlement.resourcesSettled = false;
+  if (tamper === "remove") delete record.continuation;
+  await writeFile(path, await encryptSession(JSON.stringify(record), f.binding.passphrase));
+  const cold = await opened(f, t, "open"); assert.equal((await cold.status()).storage, "tail-refused");
+  await assert.rejects(cold.reserveSuccessor({ attemptRef: first.attemptRef, plan, nativeBinding: admissionBinding(3), verifyOwnerSettled: async b => successorSettlement(b) }), /TAIL/);
+});
+
+for (const viewMaxBytes of [undefined, 1048576]) test(`merge attempt preserves ${viewMaxBytes ?? "legacy absent"} budget and exact hash across reopen`, async t => {
+  const f = await fixture(t), store = await opened(f, t), base = (await leafPlan(f)).plan;
+  const plan: Plan = { kind: "merge", sourceHead: base.sourceHead, expectedHead: base.expectedHead, nodeIndex: base.nodeIndex, modelInputHash: base.modelInputHash,
+    children: Array.from({ length: 128 }, (_, i) => "hnode_" + i.toString(16).padStart(48, "0")), ...(viewMaxBytes === undefined ? {} : { viewMaxBytes }) };
+  const reservation = await store.reserve({ plan, nativeBinding: admissionBinding(1) });
+  await store.recordModelOutcome({ attemptRef: reservation.attemptRef, outcome: "refused" }); const before = await files(f.slot); await store.close();
+  const reopened = await opened(f, t, "open");
+  const restored = await reopened.readNotAdmittedPlan(reservation.attemptRef); assert.deepEqual(restored, plan);
+  assert.equal(Object.hasOwn(restored, "viewMaxBytes"), viewMaxBytes !== undefined);
+  await assert.rejects(reopened.reserve({ plan: { ...plan, viewMaxBytes: 49152 }, nativeBinding: admissionBinding(2) }), /CONFLICT/);
+  const successor = await reopened.reserve({ plan, nativeBinding: admissionBinding(2) }); assert.equal(successor.planHash, reservation.planHash);
+  const after = new Map(await files(f.slot) as [string, string][]); for (const [name, bytes] of before) assert.equal(after.get(name!), bytes);
+});
+
+test("observed empty and refused analysis share a durable three-attempt budget and preserve every original record", async t => {
+  const f = await fixture(t), { plan } = await leafPlan(f); let store = await opened(f, t);
+  let originals: Awaited<ReturnType<typeof files>> = [];
+  for (const [i, outcome] of (["observed", "refused", "observed"] as const).entries()) {
+    const reservation = await store.reserve({ plan, nativeBinding: admissionBinding(i + 1) });
+    await store.recordModelOutcome({ attemptRef: reservation.attemptRef, outcome });
+    assert.equal(isStandingHistoryAnalysisRetryableNoOutput((await store.status()).last), true);
+    assert.deepEqual(await store.readRetryablePlan(reservation.attemptRef), plan);
+    const current = new Map(await files(f.slot) as [string, string][]);
+    for (const [name, content] of originals) assert.equal(current.get(name!), content);
+    originals = await files(f.slot); await store.close(); store = await opened(f, t, "open");
+    assert.equal((await store.status()).last?.consecutiveNoOutput, i + 1);
+    if (i < 2) {
+      await assert.rejects(store.reserve({ plan: { ...plan, modelInputHash: "c".repeat(64) }, nativeBinding: admissionBinding(i + 2) }), /CONFLICT/);
+      await assert.rejects(store.reserve({ plan, nativeBinding: { ...admissionBinding(i + 2), epochId: admissionBinding(1).epochId } }), /BINDING/);
+    }
+  }
+  await assert.rejects(store.reserve({ plan, nativeBinding: admissionBinding(4) }), /LIMIT/);
+  assert.deepEqual(await files(f.slot), originals);
+});
+test("bound admission refusal preserves encrypted evidence and admits only an identical fresh-owner successor across restart", async t => {
+  const f = await fixture(t), store = await opened(f, t), { plan, output } = await leafPlan(f);
+  const first = await store.reserve({ plan, nativeBinding: admissionBinding(1) });
+  await assert.rejects(store.readNotAdmittedPlan(first.attemptRef), /CONSUMED/);
+  await store.recordModelOutcome({ attemptRef: first.attemptRef, outcome: "refused" });
+  assert.equal(isStandingHistoryAnalysisNotAdmitted((await store.status()).last), true);
+  const original = await files(f.slot); await store.close();
+  const again = await opened(f, t, "open"); assert.equal((await again.status()).last?.consecutiveNotAdmitted, 1);
+  assert.deepEqual(await again.readNotAdmittedPlan(first.attemptRef), plan);
+  await assert.rejects(again.readNotAdmittedPlan("hattempt_" + "0".repeat(48)), /CONSUMED/);
+  for (const candidate of [
+    { plan }, { plan, nativeBinding: admissionBinding(1) },
+    { plan, nativeBinding: { ...admissionBinding(2), epochId: admissionBinding(1).epochId } },
+    { plan, nativeBinding: { ...admissionBinding(2), requestRef: admissionBinding(1).requestRef } },
+    ...["sourceHead", "expectedHead", "modelInputHash"].map(key => ({ plan: { ...plan, [key]: "c".repeat(64) }, nativeBinding: admissionBinding(2) }))
+  ]) await assert.rejects(again.reserve(candidate));
+  assert.deepEqual(await files(f.slot), original);
+  const successor = await again.reserve({ plan, nativeBinding: admissionBinding(2) });
+  await assert.rejects(again.readNotAdmittedPlan(first.attemptRef), /CONSUMED/);
+  await assert.rejects(again.readNotAdmittedPlan(successor.attemptRef), /CONSUMED/);
+  assert.notEqual(successor.attemptRef, first.attemptRef); assert.equal(successor.planHash, first.planHash);
+  // Crash after fresh reservation cannot revive either consumed attempt.
+  await again.close(); const resumed = await opened(f, t, "open");
+  assert.equal((await resumed.status()).storage, "ready"); assert.equal((await resumed.status()).attempts, 2);
+  await assert.rejects(resumed.reserve({ plan, nativeBinding: admissionBinding(3) }));
+  await resumed.prepare({ attemptRef: successor.attemptRef, output }); await resumed.commitPrepared({ attemptRef: successor.attemptRef });
+  await resumed.recordModelOutcome({ attemptRef: successor.attemptRef, outcome: "observed" }); await resumed.close();
+  const final = await opened(f, t, "open"), status = await final.status();
+  assert.equal(status.storage, "ready"); assert.equal(status.last?.node?.index, 1); assert.equal(status.last?.consecutiveNotAdmitted, undefined);
+  const after = new Map(await files(f.slot) as [string, string][]);
+  for (const [name, content] of original) assert.equal(after.get(name!), content);
+});
+
+test("consecutive admission-refusal budget persists across every reopen without appending a fourth reservation", async t => {
+  const f = await fixture(t), { plan } = await leafPlan(f); let store = await opened(f, t);
+  for (let i = 1; i <= STANDING_HISTORY_ANALYSIS_MAX_NOT_ADMITTED; i++) {
+    if (i === 3) {
+      await assert.rejects(store.reserve({ plan, nativeBinding: { ...admissionBinding(i), epochId: admissionBinding(1).epochId } }), /BINDING/);
+      await assert.rejects(store.reserve({ plan, nativeBinding: { ...admissionBinding(i), requestRef: admissionBinding(1).requestRef } }), /BINDING/);
+    }
+    const reservation = await store.reserve({ plan, nativeBinding: admissionBinding(i) });
+    await store.recordModelOutcome({ attemptRef: reservation.attemptRef, outcome: "refused" }); await store.close();
+    store = await opened(f, t, "open"); assert.equal((await store.status()).last?.consecutiveNotAdmitted, i);
+  }
+  const before = await files(f.slot); await assert.rejects(store.reserve({ plan, nativeBinding: admissionBinding(4) }), /LIMIT/);
+  assert.deepEqual(await files(f.slot), before); assert.equal((await store.status()).attempts, 3);
+});
+
+test("reopen independently rejects authenticated changed-plan and reused-owner successor reservations", async t => {
+  const f = await fixture(t), store = await opened(f, t), { plan } = await leafPlan(f);
+  const first = await store.reserve({ plan, nativeBinding: admissionBinding(1) });
+  await store.recordModelOutcome({ attemptRef: first.attemptRef, outcome: "refused" });
+  await store.reserve({ plan, nativeBinding: admissionBinding(2) }); await store.close();
+  const path = join(f.slot, "attempt-000002.reservation.enc"), original = JSON.parse(await decryptSession(await readFile(path, "utf8"), f.binding.passphrase));
+  const canonical = (v: unknown): string => Array.isArray(v) ? "[" + v.map(canonical).join(",") + "]" : v !== null && typeof v === "object" ?
+    "{" + Object.keys(v).sort().map(k => JSON.stringify(k) + ":" + canonical((v as Record<string, unknown>)[k])).join(",") + "}" : JSON.stringify(v);
+  for (const mode of ["sourceHead", "modelInputHash", "epochId", "requestRef"] as const) {
+    const changed = structuredClone(original);
+    if (mode === "sourceHead" || mode === "modelInputHash") {
+      changed.plan[mode] = "c".repeat(64); changed.planHash = createHash("sha256").update(canonical(changed.plan)).digest("hex");
+    } else changed.nativeBinding[mode] = admissionBinding(1)[mode];
+    const encrypted = await encryptSession(JSON.stringify(changed), f.binding.passphrase); await writeFile(path, encrypted);
+    const reopened = await opened(f, t, "open"); assert.equal((await reopened.status()).storage, "tail-refused");
+    assert.equal((await reopened.status()).attempts, 1); await assert.rejects(reopened.reserve({ plan, nativeBinding: admissionBinding(3) }));
+    assert.equal(await readFile(path, "utf8"), encrypted); await reopened.close();
+  }
+});
+
+test("legacy reserve refuses unknown, missing outcome, unbound refusal and contradictory prepared refusal", async t => {
+  for (const mode of ["unknown", "missing", "unbound", "prepared", "node"] as const) {
+    const f = await fixture(t), store = await opened(f, t), { plan, output } = await leafPlan(f);
+    const r = await store.reserve({ plan, ...(mode === "unbound" ? {} : { nativeBinding: admissionBinding(1) }) });
+    if (mode === "prepared" || mode === "node") await store.prepare({ attemptRef: r.attemptRef, output });
+    if (mode === "node") await store.commitPrepared({ attemptRef: r.attemptRef });
+    if (mode !== "missing") await store.recordModelOutcome({ attemptRef: r.attemptRef, outcome: mode === "unknown" ? "unknown" : "refused" });
+    await store.close(); const again = await opened(f, t, "open"), before = await files(f.slot);
+    assert.equal(isStandingHistoryAnalysisNotAdmitted((await again.status()).last), false);
+    await assert.rejects(again.reserve({ plan, nativeBinding: admissionBinding(2) })); assert.deepEqual(await files(f.slot), before);
+  }
+});
 
 test("first reservation is consumed across reopen and encrypted records never authorize model replay", async t => {
   const f = await fixture(t), store = await opened(f, t), { plan } = await leafPlan(f), first = await store.reserve({ plan });

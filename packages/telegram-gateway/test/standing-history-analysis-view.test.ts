@@ -23,6 +23,27 @@ function node(n = 1, heavy = false): StandingHistoryAnalysisNode {
 }
 const error = (code: StandingHistoryAnalysisViewError["code"]) => (v: unknown) => v instanceof StandingHistoryAnalysisViewError && v.code === code && v.message === "STANDING_HISTORY_ANALYSIS_VIEW_" + code.toUpperCase();
 
+test("large merge opt-in preserves 32KiB summaries and 128 claims while legacy defaults remain exact", () => {
+  const legacy = [node(1, true), node(2, true)], before = projectMergeView({ children: legacy, referenceKey: key, preferComplete: true });
+  const rich = [node(3), node(4)].map(n => ({ ...n, output: { summary: "я".repeat(16384),
+    claims: Array.from({ length: 128 }, (_, i) => ({ kind: "reported" as const, text: "Claim " + i,
+      supports: [{ sourceRef: ref("hsrc", i + 1), versionRef: ref("hver", i + 1) }] })) } }));
+  const large = projectMergeView({ children: rich, referenceKey: key, maxBytes: 1048576, preferComplete: true });
+  assert.equal(large.detailCoverage, "complete"); assert.ok(size(large) > 49152 && size(large) <= 1048576);
+  for (const [index, child] of large.children.entries()) { assert.equal(child.summary.text, rich[index]!.output.summary); assert.equal(child.claims.length, 128); }
+  assert.deepEqual(projectMergeView({ children: legacy, referenceKey: key, preferComplete: true }), before);
+  let notes = readNodeNotes({ node: rich[0]!, referenceKey: key });
+  while (notes.nextPosition) notes = readNodeNotes({ node: rich[0]!, referenceKey: key, position: notes.nextPosition });
+  assert.equal(notes.summary.range.toByte, 32768, "expanded authenticated cursor offsets can retrieve the complete long summary");
+});
+
+test("large merge accepts 200 complete children by bytes while ledger capacity remains structural", () => {
+  const children = Array.from({ length: 200 }, (_, i) => node(i + 1));
+  const result = projectMergeView({ children, referenceKey: key, maxBytes: 1048576, preferComplete: true });
+  assert.equal(result.children.length, 200); assert.equal(result.detailCoverage, "complete"); assert.ok(size(result) <= 1048576);
+  assert.throws(() => projectMergeView({ children: Array.from({ length: 1025 }, (_, i) => node(i + 1)), referenceKey: key, maxBytes: 1048576 }), error("input"));
+});
+
 test("small paired view preserves complete notes, exact coverage commitment and immediate supports", () => {
   const a = node(), b = node(2), before = JSON.stringify([a, b]), result = projectMergeView({ children: [a, b], referenceKey: key });
   assert.equal(result.detailCoverage, "complete"); assert.ok(size(result) <= 49152); assert.equal(JSON.stringify([a, b]), before);
@@ -83,7 +104,7 @@ test("shown-output validation detaches model data and refuses accessor or oversi
   const hostile = Object.defineProperty({}, "sourceRef", { enumerable: true, get() { accesses++; return support.sourceRef; } });
   assert.throws(() => validateStandingHistoryShownOutput(value, [hostile as typeof support]));
   assert.equal(accesses, 0);
-  assert.throws(() => validateStandingHistoryShownOutput(value, Array(4097).fill(support)));
+  assert.throws(() => validateStandingHistoryShownOutput(value, Array(16385).fill(support)));
   assert.deepEqual(validateStandingHistoryShownOutput({ summary: "No supported claims", claims: [] }, []),
     { summary: "No supported claims", claims: [] });
 });
@@ -130,15 +151,15 @@ test("positions bind ref, hash, content and key; tampering and transplant errors
 });
 
 test("large expanded coverage stays compact and does not expose material/page selectors", () => {
-  const base = node(), a = { ...base, coverage: Array.from({ length: 8192 }, (_, i) => ({ ...base.coverage[0]!, materialRef: ref("hmat", i + 1) })) };
+  const base = node(), a = { ...base, coverage: Array.from({ length: 16384 }, (_, i) => ({ ...base.coverage[0]!, materialRef: ref("hmat", i + 1) })) };
   const result = readNodeNotes({ node: a, referenceKey: key });
-  assert.equal(result.coverage.spanCount, 8192); assert.equal(result.coverage.sourceRows, 8192); assert.ok(size(result) < 3000);
+  assert.equal(result.coverage.spanCount, 16384); assert.equal(result.coverage.sourceRows, 16384); assert.ok(size(result) < 3000);
   assert.equal(JSON.stringify(result).includes(base.coverage[0]!.materialRef), false); assert.equal(JSON.stringify(result).includes(base.coverage[0]!.pageHash), false);
 });
 
 test("input and tiny-budget failures never skip an atomic claim or mutate supplied nodes", () => {
   const a = node(1, true), b = node(2, true);
-  for (const maxBytes of [0, 1023, 49153, NaN, 1200.5]) assert.throws(() => readNodeNotes({ node: a, referenceKey: key, maxBytes }), error("input"));
+  for (const maxBytes of [0, 1023, 1048577, NaN, 1200.5]) assert.throws(() => readNodeNotes({ node: a, referenceKey: key, maxBytes }), error("input"));
   assert.throws(() => projectMergeView({ children: [a, b], referenceKey: key, maxBytes: 1024 }), error("limit"));
   assert.throws(() => projectMergeView({ children: [a, a], referenceKey: key }), error("binding"));
   let reads = 0; const getter = Object.defineProperty({ ...a.output }, "summary", { enumerable: true, get() { reads++; return "private"; } });
@@ -148,4 +169,31 @@ test("input and tiny-budget failures never skip an atomic claim or mutate suppli
   assert.equal(first.claimRange.toClaim, 0); assert.ok(first.summary.range.toByte > 0); assert.ok(first.nextPosition);
   const next = readNodeNotes({ node: a, referenceKey: key, position: first.nextPosition!, maxBytes: 49152 });
   assert.equal(next.claimRange.fromClaim, 0); assert.ok(next.claims.length); assert.equal(next.claims[0]!.supports.length, 16);
+});
+
+test("wide view admits eight complete children and refuses oversized or duplicate groups", () => {
+  const children = Array.from({ length: 8 }, (_, i) => node(i + 1)), original = JSON.stringify(children);
+  const result = projectMergeView({ children, referenceKey: key, preferComplete: true });
+  assert.equal(result.children.length, 8); assert.equal(result.detailCoverage, "complete"); assert.ok(size(result) <= 49152);
+  assert.equal(JSON.stringify(children), original);
+  for (const [i, child] of result.children.entries()) {
+    assert.equal(child.nodeRef, children[i]!.nodeRef); assert.equal(child.summary.text, children[i]!.output.summary);
+    assert.deepEqual(child.claims.map(({ claimIndex, ...claim }) => claim), children[i]!.output.claims);
+    assert.equal(child.nextPosition, null); assert.deepEqual(child.omittedClaimIndices, []);
+  }
+  assert.throws(() => projectMergeView({ children: Array.from({ length: 1025 }, (_, i) => node(i + 1)), referenceKey: key, preferComplete: true }), error("input"));
+  assert.throws(() => projectMergeView({ children: [node(), node(2), node()], referenceKey: key, preferComplete: true }), error("binding"));
+  assert.throws(() => projectMergeView({ children: [node(1, true), node(2, true), node(3)], referenceKey: key, preferComplete: true }), error("limit"));
+});
+
+test("complete packing is opt-in and preserves historical pair projection for reserved hashes", () => {
+  const a = node(1, true), b = node(2), legacy = projectMergeView({ children: [a, b], referenceKey: key });
+  assert.deepEqual(projectMergeView({ children: [a, b], referenceKey: key, preferComplete: false }), legacy);
+  // If even the complete pair does not fit, the old explicit partial view and
+  // its authenticated continuations remain the exact fallback.
+  assert.deepEqual(projectMergeView({ children: [a, b], referenceKey: key, preferComplete: true }), legacy);
+  const moderate = { ...node(1), output: { summary: "Summary".repeat(500), claims: Array.from({ length: 16 }, () => ({
+    kind: "reported" as const, text: "Claim".repeat(180), supports: node(1).output.claims[0]!.supports })) } };
+  const packed = projectMergeView({ children: [moderate, node(2)], referenceKey: key, preferComplete: true });
+  assert.equal(packed.detailCoverage, "complete"); assert.equal(packed.children[0].claims.length, 16);
 });

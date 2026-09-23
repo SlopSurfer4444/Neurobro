@@ -72,6 +72,16 @@ test("verified text joins exact content evidence while retaining gaps for dates 
   assert.deepEqual(withoutText.content, { kind: "text", text: null }); assert.ok(withoutText.gaps.includes("text-not-joined")); assert.equal(withoutText.actionRef, view.actionRef);
 });
 
+test("standalone wire evidence is accepted only on verified pilot records with an original task anchor", () => {
+  const source = pilot(), detached = { ...source, record: { ...source.record, wireReplyToMessageId: null } };
+  assert.equal(projectStandingOwnAction(input(detached)).verdict, "verified");
+  for (const state of ["planned", "sending", "unknown", "failed_terminal"] as const) {
+    const invalid = pilot(state); assert.throws(() => projectStandingOwnAction(input({ ...invalid, record: { ...invalid.record, wireReplyToMessageId: null } })));
+  }
+  for (const wireReplyToMessageId of [undefined, 789]) assert.throws(() => projectStandingOwnAction(input({ ...source,
+    record: { ...source.record, wireReplyToMessageId } } as unknown as StandingOwnActionSource)));
+});
+
 test("UNKNOWN, incomplete and failed terminal records never project a successful effect or concrete identity", () => {
   for (const state of ["unknown", "planned", "sending", "failed_terminal"] as const) {
     for (const source of [pilot(state), ...(state === "planned" ? [] : [image(state), artifact(state)])]) {

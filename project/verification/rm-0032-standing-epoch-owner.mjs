@@ -14,7 +14,16 @@ const ANALYSIS_NAMES=['neurobro_analysis_material','neurobro_analysis_notes','ne
 export function snapshotEpochSessionModeFromInput(input){
   if(!input||typeof input!=='object'||types.isProxy(input))return fail('CONFIG');
   const d=Object.getOwnPropertyDescriptor(input,'sessionMode');if(!d)return undefined;
-  if(!Object.hasOwn(d,'value')||d.value!=='standing-scoped-epoch-v1')return fail('CONFIG');return d.value;
+  if(!Object.hasOwn(d,'value')||!['standing-scoped-epoch-v1','standing-scoped-epoch-v2','standing-parallel-epoch-v1'].includes(d.value))return fail('CONFIG');return d.value;
+}
+export function snapshotEpochParallelOptions(input){
+  const d=Object.getOwnPropertyDescriptor(input,'parallelOptions');
+  if(!d||!Object.hasOwn(d,'value')||!d.value||types.isProxy(d.value)||Object.getPrototypeOf(d.value)!==Object.prototype)return fail('CONFIG');
+  const ds=Object.getOwnPropertyDescriptors(d.value);
+  if(Reflect.ownKeys(ds).length!==2||['analysisWorkers','communityAssessment'].some(k=>!ds[k]||!Object.hasOwn(ds[k],'value')))return fail('CONFIG');
+  const analysisWorkers=ds.analysisWorkers.value,communityAssessment=ds.communityAssessment.value;
+  if(!Number.isSafeInteger(analysisWorkers)||analysisWorkers<1||typeof communityAssessment!=='boolean'||analysisWorkers+1+Number(communityAssessment)>8)return fail('CONFIG');
+  return Object.freeze({analysisWorkers,communityAssessment});
 }
 export function snapshotEpochAnalysisCallbacks(input){
   if(!input||typeof input!=='object'||types.isProxy(input))return fail('CONFIG');
@@ -70,14 +79,17 @@ export async function startOwnedEpoch(input){
   // capsule must be the same owned bytes later written to this one child.
   const extraTools=snapshotEpochExtraToolsFromInput(input);
   const sessionMode=snapshotEpochSessionModeFromInput(input),scoped=sessionMode!==undefined;
+  const parallel=sessionMode==='standing-parallel-epoch-v1',parallelOptions=parallel?snapshotEpochParallelOptions(input):undefined;
+  if(!parallel&&Object.hasOwn(input,'parallelOptions'))return fail('CONFIG');
   const analysis=scoped?snapshotEpochAnalysisCallbacks(input):undefined;
   if(!scoped&&(Object.hasOwn(input,'analysisTools')||Object.hasOwn(input,'onToolResultSent')))return fail('CONFIG');
   if(scoped&&((extraTools?.length??0)+4>32||extraTools?.some(tool=>ANALYSIS_NAMES.includes(tool.name))))return fail('CONFIG');
-  const {bootstrap:suppliedBootstrap,epochId,signal,spawnChild,createWire,openSession,recordFinal,history:historyPort,clock:clockPort}=input;
+  const {bootstrap:suppliedBootstrap,epochId,signal,spawnChild,createWire,openSession,recordFinal,history:historyPort,clock:clockPort,isWorkerTurnNotAdmitted=()=>false}=input;
   const bootstrap=Buffer.isBuffer(suppliedBootstrap)?Buffer.from(suppliedBootstrap):null;
   const historyCall=historyPort?.call;
   if(!bootstrapValid(bootstrap)||!/^[a-f0-9]{32}$/.test(epochId)||!(signal instanceof AbortSignal)||signal.aborted)return fail('CONFIG');
   for(const port of [spawnChild,createWire,openSession,recordFinal])if(typeof port!=='function')return fail('CONFIG');
+  if(typeof isWorkerTurnNotAdmitted!=='function')return fail('CONFIG');
   if(typeof historyCall!=='function'||(clockPort!==undefined&&typeof clockPort!=='function'))return fail('CONFIG');
   const history=Object.freeze({call:(...args)=>Reflect.apply(historyCall,historyPort,args)});
   const clock=clockPort??(()=>performance.now()),started=clock(),overallEnd=started+OWNER_LIMITS.overallMs;
@@ -86,9 +98,12 @@ export async function startOwnedEpoch(input){
   let poisoned=false,killed=false,exitObserved=false,closeObserved=false,exitCode=null,exitSignal=null,closeCode=null,closeSignal=null;
   let stderrBytes=0,stderrEnded=false,stdoutEnded=false,peerInputClosed=false,wireCleanEof=false,streamError=false,childError=false,persisted=false;
   let epochResult=null,supervisorResult=null,sessionClosed=null;
+  let poolCustodyProof=null;
+  const parallelActive=new Set();
   const epochReceipt=value=>{
     const fixed=normalizeEpochResult(value);
-    if(fixed.schema!==(scoped?'decadans.rm0032.standing-scoped-epoch.v1':'decadans.rm0032.standing-epoch.v1'))return fail('MODE');
+    if(fixed.schema!==(parallel?'decadans.rm0032.standing-parallel-epoch.v1':scoped?'decadans.rm0032.standing-scoped-epoch.'+(sessionMode.endsWith('v2')?'v2':'v1'):'decadans.rm0032.standing-epoch.v1'))return fail('MODE');
+    if(parallel&&fixed.pool!==null&&fixed.pool.epochRef!==epochId)return fail('MODE');
     return fixed;
   };
   const supervisorReceipt=value=>{
@@ -97,7 +112,7 @@ export async function startOwnedEpoch(input){
   let diagnosticsOnly=false,controlFault=false,writesRevoked=false;
   const wireOperations=new Set();
   const initialized=deferred(),childClosed=deferred(),stdoutEof=deferred(),custodyControl=new AbortController();
-  const gate=createEpochCustodyGate(custodyControl.signal);
+  const gate=createEpochCustodyGate(custodyControl.signal,parallelOptions);
   const now=()=>{const at=clock();if(!Number.isFinite(at)||at<started)return fail('CLOCK');return at;};
   const remaining=end=>{const left=end-now();if(left<=0)return fail('DEADLINE');return left;};
   const wait=async(promise,end)=>{
@@ -196,6 +211,10 @@ export async function startOwnedEpoch(input){
         if(!epochResult)epochResult=epochReceipt(envelope(await receiveControl(workEnd()),'epochResult','receipt'));
         if(!supervisorResult)supervisorResult=supervisorReceipt(envelope(await receiveControl(workEnd()),'supervisorResult','receipt'));
         if(!isDeepStrictEqual(epochResult,supervisorResult.client))return fail('PROOF_MISMATCH');
+        if(parallel&&(!isDeepStrictEqual(sessionClosed?.poolClosed?.receipt,epochResult.pool)||
+          !isDeepStrictEqual(poolCustodyProof,epochResult.custodyChildren)||
+          !isDeepStrictEqual(poolCustodyProof.map(({workerId,processId})=>({workerId,processId})),
+            epochResult.pool?.children.map(({workerId,processId})=>({workerId,processId}))))){controlFault=true;return fail('PROOF_MISMATCH');}
       }
       if(typeof wire?.sealWrites!=='function')return fail('WIRE_CONTRACT');
       wire.sealWrites(); // Keep queued/partial read data until exact clean EOF.
@@ -301,7 +320,7 @@ export async function startOwnedEpoch(input){
     child.once('exit',(code,signal)=>{exitObserved=true;exitCode=Number.isSafeInteger(code)?code:null;exitSignal=signal??null;if(!closing){poisoned=true;requestClose();}});
     child.once('close',(code,signal)=>{closeObserved=true;closeCode=Number.isSafeInteger(code)?code:null;closeSignal=signal??null;childClosed.resolve();});
     await wait(bootstrapWrite(),Math.min(overallEnd,now()+OWNER_LIMITS.bootstrapMs));bootstrapJoined=true;
-    const canonicalWire=createWire({readable:child.stdout,writable:child.stdin,onFault:rememberError});
+    const canonicalWire=createWire({readable:child.stdout,writable:child.stdin,onFault:rememberError,...(parallel?{multiplexVisualInputs:true}:{})});
     wire=Object.freeze({
       send:(value,timeout)=>trackWire(()=>{
         if(writesRevoked||epochResult||supervisorResult)return fail('TERMINAL');
@@ -316,10 +335,11 @@ export async function startOwnedEpoch(input){
       epochResult=epochReceipt(envelope(custody,'epochResult','receipt'));
       return fail('PREP_REFUSED');
     }
-    gate.accept(custody);
+    const custodyProof=gate.accept(custody);
+    if(parallel)poolCustodyProof=custodyProof;
     if(stopEnd!==undefined)return fail('STOPPED');
     session=await openSession({epochId,wire,signal:custodyControl.signal,custodyReady:gate.ready,clock,
-      ...(scoped?{conversation:{history,...(extraTools===undefined?{}:{extraTools})},...analysis}:{history,...(extraTools===undefined?{}:{extraTools})})});
+      ...(scoped?{...(parallel?{sessionMode,parallelOptions,custodyChildren:custodyProof}:sessionMode==='standing-scoped-epoch-v2'?{sessionMode}:{}),conversation:{history,...(extraTools===undefined?{}:{extraTools})},...analysis}:{history,...(extraTools===undefined?{}:{extraTools})})});
     if(stopEnd!==undefined)return fail('STOPPED');
     startupDone=true;
   }catch{
@@ -327,9 +347,15 @@ export async function startOwnedEpoch(input){
   }finally{initialized.resolve();}
   const operation=(name,args)=>{
     if(closing||poisoned||!startupDone)return Promise.reject(new EpochOwnerError('CLOSED'));
-    if(scoped&&active)return Promise.reject(new EpochOwnerError('BUSY'));
+    if(scoped&&!parallel&&active)return Promise.reject(new EpochOwnerError('BUSY'));
     const value=Promise.resolve().then(()=>session[name](...args));active=value;
-    if(scoped)void value.then(()=>{if(active===value)active=undefined;},()=>{if(active===value)active=undefined;requestClose();}).catch(()=>{});
+    if(parallel){
+      parallelActive.add(value);active=Promise.allSettled([...parallelActive]);
+      void value.then(()=>{},error=>{if(!isWorkerTurnNotAdmitted(error))requestClose();}).finally(()=>{
+        parallelActive.delete(value);active=parallelActive.size?Promise.allSettled([...parallelActive]):undefined;
+      }).catch(()=>{requestClose();});
+    }
+    else if(scoped)void value.then(()=>{if(active===value)active=undefined;},()=>{if(active===value)active=undefined;requestClose();}).catch(()=>{});
     else void value.catch(()=>{requestClose();}).finally(()=>{if(active===value)active=undefined;}).catch(()=>{});
     return value;
   };
@@ -337,8 +363,10 @@ export async function startOwnedEpoch(input){
     ...(scoped?{
       turnConversation:(...args)=>operation('turnConversation',args),releaseConversation:(...args)=>operation('releaseConversation',args),
       turnAnalysis:(...args)=>operation('turnAnalysis',args),releaseAnalysis:(...args)=>operation('releaseAnalysis',args),
+      ...(sessionMode==='standing-scoped-epoch-v2'||parallelOptions?.communityAssessment?{turnCommunityAssessment:(...args)=>operation('turnCommunityAssessment',args),releaseCommunityAssessment:(...args)=>operation('releaseCommunityAssessment',args)}:{}),
     }:{turn:(...args)=>operation('turn',args),release:(...args)=>operation('release',args)}),
-    admission:()=>closing||poisoned?'unavailable':session.admission(),
+    admission:(...args)=>closing||poisoned?'unavailable':session.admission(...args),
+    ...(parallel?{workerIds:()=>session.workerIds(),analysisWorkerIds:()=>session.analysisWorkerIds()}:{}),
     state:()=>Object.freeze({closing:!!closing,poisoned,persisted,final}),
     close:requestClose,
   });

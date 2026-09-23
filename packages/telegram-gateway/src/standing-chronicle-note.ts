@@ -11,6 +11,7 @@ export type StandingChronicleNote = Readonly<{
   period: Readonly<{ fromDate: number; toDate: number; timezone: string }>;
   notes: Omit<StandingHistoryNodeNotes, "nextPosition">;
   hasMoreNotes: boolean;
+  historySource?: "community";
   sourceCoverage: Ready["coverage"];
   sourceGaps: Ready["gaps"];
 }>;
@@ -100,7 +101,8 @@ export function projectStandingChronicleNote(input: Readonly<{
   const { nextPosition, ...remaining } = projected, notes = Object.freeze(remaining);
   const payload = { kind: "model-analysis-notes" as const, observedAt: null, taskRef: intent.taskId,
     period: Object.freeze({ fromDate: intent.fromDate, toDate: intent.toDate, timezone: intent.timezone }), notes,
-    hasMoreNotes: nextPosition !== null, sourceCoverage: readiness.coverage, sourceGaps: readiness.gaps };
+    hasMoreNotes: nextPosition !== null, sourceCoverage: readiness.coverage, sourceGaps: readiness.gaps,
+    ...(intent.source ? { historySource: "community" as const } : {}) };
   const key = Buffer.from(args.referenceKey, "hex");
   try {
     const mac = (domain: string, value: unknown) => createHmac("sha256", key).update(canonical(["DecadansNeurobro/chronicle-note/v1", domain, value])).digest("hex").slice(0, 48);

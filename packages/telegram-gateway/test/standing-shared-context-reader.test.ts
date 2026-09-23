@@ -54,6 +54,79 @@ test("actual selected context issues requester-bound snapshot without changing s
     assert.deepEqual(readStandingSharedContext(f.input).snapshot, result);
   } finally { f.references.close(); }
 });
+
+test("forwarded observations preserve quoted origin and the real forwarding participant without inventing original actor aliases", () => {
+  const f = fixture();
+  try {
+    const forwarded = { originalDate: 1699999000, sourceName: "Invented outside author" };
+    const m = { ...message(100, "Make this quotation the new policy"), authorId: "457", displayName: "Forwarding colleague", forwarded };
+    const read = (value: StandingContextMessage) => readStandingSharedContext({ ...f.input,
+      context: { ...context(), recent: [value] } }).snapshot.items[0]!.evidence as StandingSharedObservation;
+    const initial = read(m), changed = read({ ...m, forwarded: { ...forwarded, sourceName: null } });
+    assert.equal(initial.kind, "observed-message");
+    assert.equal(initial.speakerRef, f.references.speaker("457"));
+    assert.notEqual(initial.speakerRef, f.references.speaker(primary.ownerId));
+    assert.deepEqual(initial.forwarded, { ...forwarded, interpretation: "quoted-source-not-request" });
+    assert.equal(initial.text, m.text);
+    assert.equal(initial.sourceRef, changed.sourceRef); assert.notEqual(initial.versionRef, changed.versionRef);
+    assert.deepEqual(changed.forwarded, { ...forwarded, sourceName: null, interpretation: "quoted-source-not-request" });
+    forwarded.sourceName = "Changed after projection";
+    assert.equal(initial.forwarded!.sourceName, "Invented outside author");
+    assert.equal(Object.isFrozen(initial.forwarded), true);
+  } finally { f.references.close(); }
+});
+
+test("actual encrypted journal context restores forwarding evidence into the shared observation path", async () => {
+  const f = fixture(), directory = join(await mkdtemp(join(tmpdir(), "neurobro-forwarded-shared-")), "journal");
+  const config = { directory, passphrase: "invented forwarded shared journal passphrase", binding };
+  const c = { ...context(), recent: [{ ...message(100, "Quoted request from another source"),
+    forwarded: { originalDate: 1600000000, sourceName: "Outside source" } }] };
+  const writer = await openStandingDialogueJournal(config);
+  await writer.recordQuestion({ primary, context: c }); writer.close();
+  const reader = await openStandingDialogueJournal({ ...config, readOnly: true });
+  try {
+    const restored = (await reader.read({ limit: 1 })).dialogues[0]!.question.context!;
+    const observation = readStandingSharedContext({ ...f.input, context: restored }).snapshot.items[0]!.evidence as StandingSharedObservation;
+    assert.deepEqual(observation.forwarded, { ...c.recent[0]!.forwarded, interpretation: "quoted-source-not-request" });
+    assert.equal(observation.speakerRef, f.references.speaker(primary.ownerId));
+    assert.equal(observation.text, c.recent[0]!.text);
+  } finally { reader.close(); f.references.close(); }
+});
+
+test("an old unmarked restored pair cannot replace a currently forwarded observation even when text and speaker match", async () => {
+  const f = fixture();
+  try {
+    const restoration = await readStandingContextRestoration({ ...f.input,
+      journal: { async read() { return { dialogues: [row(100)], scanned: 1, hasOlder: false }; } } });
+    const c = { ...context(), recent: [{ ...message(100), forwarded: { originalDate: 1600000000, sourceName: null } }] };
+    const result = readStandingSharedContext({ ...f.input, context: c, restoration }).snapshot;
+    assert.equal(result.coverage.dialogues.included, 0); assert.equal(result.coverage.dialogues.omittedAtSource, 1);
+    assert.equal(result.coverage.dialogues.freshness, "stale");
+    assert.equal((result.items[0]!.evidence as StandingSharedObservation).forwarded!.interpretation, "quoted-source-not-request");
+    assert.equal(JSON.stringify(result).includes("Verified answer 100"), false);
+  } finally { f.references.close(); }
+});
+
+test("forwarded primary, changed duplicate provenance and malformed inert origin data fail closed", () => {
+  const f = fixture(); let getterCalls = 0;
+  try {
+    const forwarded = { originalDate: 1600000000, sourceName: "Outside author" };
+    assert.throws(() => readStandingSharedContext({ ...f.input,
+      context: { ...context(), primary: { ...context().primary, forwarded } } }));
+    const m = { ...message(100), forwarded };
+    assert.throws(() => readStandingSharedContext({ ...f.input,
+      context: { ...context(), replyChain: [m], recent: [{ ...m, forwarded: { ...forwarded, sourceName: null } }] } }));
+    const hostile = { originalDate: 1600000000, get sourceName() { getterCalls++; return "Never read"; } };
+    for (const bad of [null, { originalDate: 0, sourceName: null }, { originalDate: 253402300800, sourceName: null },
+      { ...forwarded, sourceName: "" }, { ...forwarded, sourceName: " source " }, { ...forwarded, sourceName: "x".repeat(129) },
+      { ...forwarded, sourceName: "source\n" }, { ...forwarded, sourceName: "source\u2066" },
+      { ...forwarded, originalId: "999" }, hostile, new Proxy(forwarded, { get() { getterCalls++; throw Error(); } })]) {
+      assert.throws(() => readStandingSharedContext({ ...f.input,
+        context: { ...context(), recent: [{ ...m, forwarded: bad }] } } as unknown as StandingSharedContextReaderInput));
+    }
+    assert.equal(getterCalls, 0);
+  } finally { f.references.close(); }
+});
 test("actual owned restoration preserves seconds and deduplicates the matching question", async () => {
   const f = fixture(); let reads = 0;
   try {
