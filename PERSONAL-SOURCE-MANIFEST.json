@@ -5,9 +5,9 @@
   "sourceOnly": true,
   "byteSurface": "Git index blobs after standard text normalization; original before-transform source hashes are recorded separately in source admissions",
   "selfExcluded": "PERSONAL-SOURCE-MANIFEST.json",
-  "files": 665,
-  "bytes": 13428542,
-  "pathListSha256": "038923fcc9cdc7b27ac848086147070884435566946909ad1c8f9da2497fad0b",
+  "files": 667,
+  "bytes": 13439894,
+  "pathListSha256": "dc77772491e55c29301ec08503ca8a8b9f30743ea8b38af6ea4f3753a29eb37f",
   "entries": [
     {
       "path": ".gitattributes",
@@ -21,13 +21,13 @@
     },
     {
       "path": "PERSONAL-SOURCE-ADMISSION.json",
-      "bytes": 38909,
-      "sha256": "c7d79ddc5e5ebfa99e23abc1a89855a76628f41392f7b78269be4027bf8d3879"
+      "bytes": 39258,
+      "sha256": "6795813463688ace911fe7900343d0974ebca5e48e01a55fb2ed093051760caf"
     },
     {
       "path": "PERSONAL-VALIDATION.md",
-      "bytes": 2325,
-      "sha256": "0bde74ff686a452599baadae9de59d3a26fa8906e018430e06f4f4c65044d038"
+      "bytes": 4399,
+      "sha256": "1d2282a0e6376233f23a39d16a4368c87679832de0c3b6106dcc6fb1798ebded"
     },
     {
       "path": "README.md",
@@ -38,6 +38,11 @@
       "path": "README.ru.md",
       "bytes": 9720,
       "sha256": "d97cba46d41d4019c604649f5497090d4ad0b05cb1ebc4ec139503c46abfa12f"
+    },
+    {
+      "path": "STATUS-FIX-ADMISSION-20261007.json",
+      "bytes": 2707,
+      "sha256": "441bc06c57b4e2f59e219226f66ecf8d4b569cbfa3631125e3555bd913936bd3"
     },
     {
       "path": "THIRD_PARTY.md",
@@ -371,8 +376,8 @@
     },
     {
       "path": "packages/personal-agent/src/core/controller.ts",
-      "bytes": 60251,
-      "sha256": "180da3debb8504649169e8964a1b688004d140497114b7191c8d122ebe1f6527"
+      "bytes": 60738,
+      "sha256": "0151c33a1ac067285b9709fa31e3502a23b27191d5df2d9d4d6dc4f2411dc071"
     },
     {
       "path": "packages/personal-agent/src/core/index.ts",
@@ -943,6 +948,11 @@
       "path": "packages/personal-agent/test/owner-controls/service.test.ts",
       "bytes": 31357,
       "sha256": "e0cb206d0f545cc727dcf29df613151b3fdfc12e828bc3a7f713984741d8b140"
+    },
+    {
+      "path": "packages/personal-agent/test/status-performance.test.ts",
+      "bytes": 5735,
+      "sha256": "ee9b05e86276ea280d3c06fd367dfc33cda3360af047b930ef5a8a5a1e673652"
     },
     {
       "path": "packages/personal-agent/test/telegram/approved-media.test.ts",

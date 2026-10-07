@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "kind": "public-source-only-status-performance-follow-up",
+  "date": "2026-10-07",
+  "publicBaseCommit": "b3bb5b13126c87204ffed4f2a910ba52dac756a8",
+  "sourcePacketManifestSha256": "c27f07c2c1f19738dd2e4ad45c03cb92e36ade7367329b8d3daaaeaaa95f5b63",
+  "sourceVerifiedBeforeAndAfter": true,
+  "sourceHistoryIncluded": false,
+  "originalEntries": [
+    {
+      "path": "src/core/controller.ts",
+      "sha256": "f526296cf12d6809370c12867f26dc8bfc0acbfc8ace72a73969d7a2ac6e161c",
+      "bytes": 61393
+    },
+    {
+      "path": "test/status-performance.test.ts",
+      "sha256": "ee9b05e86276ea280d3c06fd367dfc33cda3360af047b930ef5a8a5a1e673652",
+      "bytes": 5735
+    }
+  ],
+  "transformations": [
+    {
+      "path": "packages/personal-agent/src/core/controller.ts",
+      "reason": "CRLF to LF only; original packet bytes bound above"
+    },
+    {
+      "path": "packages/personal-agent/test/status-performance.test.ts",
+      "reason": "CRLF to LF only; original packet bytes bound above"
+    }
+  ],
+  "scope": "Two source files only; previous synthetic/privacy replacements and upstream licenses retained",
+  "publicationCondition": "Owner confirmed the agent is alive; this is owner testimony, not an independently observed fresh reply or automatic receipt",
+  "excluded": "Packet private paths, publication gate history, runtime state, receipts, messages and credentials are not included",
+  "reportedSourceChecks": {
+    "tests": {
+      "typecheck": "PASS",
+      "failed": 0,
+      "skipped": 1,
+      "total": 666,
+      "passed": 665
+    },
+    "equivalence": {
+      "equal": true,
+      "comparedLookups": 49,
+      "method": "Exact pre-change method against current method on read-only snapshot, plus synthetic state precedence and read-count regressions"
+    },
+    "benchmark": {
+      "afterStoreCalls": 6,
+      "beforeDecryptions": 1505,
+      "afterMs": 2.37,
+      "beforeMs": 39.65,
+      "afterDecryptions": 74,
+      "beforeStoreCalls": 101,
+      "scope": "One read-only local status snapshot benchmark reported by source executor; not Telegram/model end-to-end latency or uptime"
+    }
+  },
+  "publicCloneChecks": {
+    "typecheck": {
+      "result": "PASS",
+      "command": "node node_modules/typescript/bin/tsc -p tsconfig.json"
+    },
+    "focusedTests": {
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "command": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 --test-reporter=spec test/status-performance.test.ts"
+    },
+    "independentReview": "CLEAR: two-file code/privacy/license review; hash pins verified",
+    "fullSuiteRerun": false,
+    "benchmarkRerun": false,
+    "runtimeOperations": false
+  }
+}

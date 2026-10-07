@@ -1155,5 +1155,15 @@
       "license": "MIT",
       "matchesExistingSourceNotice": true
     }
+  ],
+  "followUpAdmissions": [
+    {
+      "path": "STATUS-FIX-ADMISSION-20261007.json",
+      "changes": [
+        "packages/personal-agent/src/core/controller.ts",
+        "packages/personal-agent/test/status-performance.test.ts"
+      ],
+      "reason": "Avoid repeated whole-task status scans; later source generation independently bound"
+    }
   ]
 }

@@ -472,12 +472,19 @@ export class PersonalAgent {
   status(): TaskStatus[];
   status(taskId: string): TaskStatus | undefined;
   status(taskId?: string): TaskStatus[] | TaskStatus | undefined {
-    const statuses = this.store.list<InternalIntent>('tasks').filter(intent => !intent.controlOnly).map(intent => {
+    const selected = taskId ? this.store.get<InternalIntent>('tasks', taskId) : undefined;
+    const intents = (taskId ? (selected ? [selected] : []) : this.store.list<InternalIntent>('tasks')).filter(intent => !intent.controlOnly);
+    if (!intents.length) return taskId ? undefined : [];
+    // This synchronous snapshot shares collection reads across tasks; no cached
+    // authority survives the call or hides a later UNKNOWN/control transition.
+    const allEffects = this.broker.effects();
+    const childStops = this.store.list<ChildStop>('childStops');
+    const statuses = intents.map(intent => {
       const run = this.store.get<RunSnapshot>('runs', admissionKey(intent.id, intent.revision));
       const admission = this.store.get<Admission>('admissions', admissionKey(intent.id, intent.revision));
       const control = this.store.get<Control>('controls', intent.id);
-      const effects = this.broker.effects(intent.id);
-      const childStop = this.store.list<ChildStop>('childStops').find(stop => stop.taskId === intent.id && stop.state !== 'settled');
+      const effects = allEffects.filter(effect => effect.taskId === intent.id);
+      const childStop = childStops.find(stop => stop.taskId === intent.id && stop.state !== 'settled');
       const uncertainty = effects.some(e => ['unknown', 'dispatching'].includes(e.state)) || !!childStop;
       const state: TaskStatus['state'] = uncertainty || admission?.state === 'unknown' || run?.state === 'unknown' ? 'unknown' :
         control?.cancelledAt || run?.state === 'cancelled' ? 'cancelled' : control?.heldAt ? 'paused' : run?.state === 'interrupted' ? 'unknown' :

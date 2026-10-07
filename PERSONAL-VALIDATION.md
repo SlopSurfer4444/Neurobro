@@ -1,3 +1,21 @@
+# Status lookup follow-up - 7 October 2026
+
+This source-only fix follows public commit b3bb5b13126c87204ffed4f2a910ba52dac756a8. STATUS-FIX-ADMISSION-20261007.json binds the two later packet files and their original hashes; PERSONAL-SOURCE-MANIFEST.json binds the complete public snapshot. Previous synthetic replacements, private-data exclusions and third-party license notices remain in place.
+
+The controller now selects one task directly for task-specific status and reads shared effects/child-stop collections once per status call. It retains state precedence, first unsettled child selection and current-revision lookup. It does not cache authority across calls. New synthetic tests cover later UNKNOWN transitions and bounded store reads without invoking the engine.
+
+Checks actually repeated in this isolated public clone:
+
+- TypeScript no-emit check: **PASS** (node node_modules/typescript/bin/tsc -p tsconfig.json).
+- node --disable-warning=ExperimentalWarning --test --test-concurrency=1 --test-reporter=spec test/status-performance.test.ts: **2 passed, 0 failed, 0 skipped**.
+- Independent two-file code/privacy/license review: **CLEAR**; handoff manifest and both original file hashes matched.
+
+Source executor's hash-bound packet separately reports typecheck PASS, **666 total / 665 passed / 0 failed / 1 skipped**, and 49 equal lookups against the pre-change method. It reports one local read-only status snapshot benchmark of 39.65 ms before and 2.37 ms after, with store calls 101 to 6 and decryptions 1505 to 74. The public publisher did not repeat that full suite, equivalence run or benchmark. These numbers measure that local status operation, not Telegram/model response latency or uptime.
+
+The owner confirmed that the agent is alive, satisfying the requested conditional publication. This is owner confirmation, not a publisher-observed fresh reply or an automatic runtime receipt. No runtime activation, Telegram/model operation, production data access or BAW work was performed for this publication.
+
+## Earlier public snapshot checks (preserved)
+
 # Personal source validation - 7 October 2026
 
 This report applies to the public personal-agent source copy described in PERSONAL-SOURCE-ADMISSION.json. It is separate from historical group-version checks.
