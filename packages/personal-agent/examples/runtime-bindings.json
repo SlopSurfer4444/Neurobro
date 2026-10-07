@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "node": { "path": "C:/PATH/TO/VERIFIED/node.exe", "sha256": "REPLACE_WITH_VERIFIED_BINARY_SHA256", "version": "24.15.0" },
+  "python": { "path": "C:/PATH/TO/REPO/packages/personal-agent/.runtime/hermes-agent/.venv/Scripts/python.exe", "sha256": "REPLACE_WITH_VERIFIED_BINARY_SHA256", "version": "3.14.4" },
+  "hermesSource": { "path": "C:/PATH/TO/REPO/packages/personal-agent/.runtime/hermes-agent", "commit": "8d5e3e412138342e8bf30443e72bd4e6a9abd057" },
+  "tdjson": { "path": "C:/PATH/TO/VERIFIED/tdjson.dll", "sha256": "REPLACE_WITH_VERIFIED_BINARY_SHA256", "version": "1.8.67", "sourceCommit": "42e6a5259551178d1dab54a22ad96d14bd906e20" },
+  "containment": { "accepted": false }
+}

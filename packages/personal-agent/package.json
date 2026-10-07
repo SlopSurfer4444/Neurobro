@@ -1,0 +1,14 @@
+{
+  "name": "@neurobro/personal-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.15.0" },
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --test test/**/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "start": "node --disable-warning=ExperimentalWarning src/cli.ts",
+    "doctor": "node --disable-warning=ExperimentalWarning src/cli.ts doctor"
+  },
+  "devDependencies": { "@types/node": "24.13.3", "typescript": "5.9.3" }
+}

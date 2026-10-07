@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "classification": "repo-local dependency",
+  "node": { "minimumVersion": "24.15.0", "selectedVersion": "24.15.0" },
+  "python": { "selectedVersion": "3.14.4", "minimumVersion": "3.14.0", "maximumVersionExclusive": "3.15.0" },
+  "hermes": {
+    "repository": "https://github.com/NousResearch/hermes-agent",
+    "commit": "8d5e3e412138342e8bf30443e72bd4e6a9abd057",
+    "lockfile": "uv.lock",
+    "lockfileSha256": "5f81d0f7057b13bac07a8ee663ee5f501f4f0d743b2beefd5ee1d1fd334c85a5",
+    "launch": ["-m", "hermes_cli.main", "gateway"],
+    "api": "native-runs-v1",
+    "requiresDurableRunIdempotency": true
+  },
+  "optionalCron": {
+    "defaultPort": 8789,
+    "patchId": "neurobro-hermes-cron-bridge-v2",
+    "overlay": "tools/hermes/patches/native-overlay-v2-final",
+    "requiresExplicitReviewedApply": true,
+    "requiresAppliedFileHashVerification": true
+  },
+  "tdlib": {
+    "repository": "https://github.com/tdlib/td",
+    "commit": "42e6a5259551178d1dab54a22ad96d14bd906e20",
+    "version": "1.8.67",
+    "schemaSha256": "bc998a2c6dd7e0a8a250dd732ac64d7a7d5e8efdc47760c899cf1aa4660037d0",
+    "binary": "operator-built tdjson.dll / libtdjson.so / libtdjson.dylib",
+    "binaryHashRequired": true
+  },
+  "acceptance": {
+    "sourceSelection": "pinned",
+    "installedEngine": "unverified",
+    "tdlibNativeAbi": "unverified",
+    "accountAuthorization": "not-performed",
+    "workerContainment": "not-accepted"
+  }
+}

@@ -1,5 +1,15 @@
 # Neurobro
 
+## Current personal version — 7 October 2026
+
+The current development snapshot is [packages/personal-agent](packages/personal-agent): a supervised **TDLib Python bridge → TypeScript authority broker → external Hermes engine**. It is an independent personal composition, separate from the group gateway described below. Hermes is a Nous Research dependency; this project implements the bridges, broker and integration. See [current architecture and checks](docs/personal-agent.md), [source scope](PERSONAL-SOURCE-ADMISSION.json), [validation](PERSONAL-VALIDATION.md) and [licenses](THIRD_PARTY.md).
+
+No live Telegram session, provider credentials, user data, production configuration, installed runtime or private Git history is included. Installing dependencies and running synthetic tests does not authorize account login, activation or old task/schedule execution.
+
+## Historical group version — 14 September 2026
+
+The following description is retained for the previously published GramJS/Codex App Server source snapshot `6f2bed54ad05f444bee16d81b0f60cc7ef7e7f83`. Its capabilities and verification results are historical and do not certify the current personal version. The former “24/7” description identifies a background operating mode, without measured uptime.
+
 **A Telegram AI assistant that participates through a real user account over MTProto.**
 
 Neurobro connects a Telegram account to an agent runtime with conversation memory, tools and long-running tasks. It can respond to direct requests and replies, work with media, search conversations and optionally join a discussion on its own. **No BotFather bot or Telegram Bot API token is required for the account gateway.**
@@ -71,4 +81,4 @@ AI coding agents were used throughout implementation, test development and code 
 
 The public repository contains curated source and synthetic fixtures. Private chat history, participant data, credentials, operational records and the original private Git history are excluded.
 
-No project-wide license has been selected for the original source. Third-party dependencies retain their own licenses and are not vendored. See [THIRD_PARTY.md](THIRD_PARTY.md).
+No project-wide license has been selected for the original source. Third-party dependencies retain their own licenses. The personal version includes a pinned TDLib schema and a modified Hermes source overlay with the required notices; full upstream runtimes are not bundled. See [THIRD_PARTY.md](THIRD_PARTY.md).

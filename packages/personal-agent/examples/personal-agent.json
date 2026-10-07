@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "stateDirectory": "C:/PATH/TO/PRIVATE/STATE",
+  "account": { "id": "0", "ownerId": "0", "controlPeerId": "0" },
+  "encryptionKeyEnv": "NEUROBRO_STATE_KEY",
+  "hermes": { "baseUrl": "http://127.0.0.1:8642", "apiKeyEnv": "NEUROBRO_HERMES_API_KEY", "requestTimeoutMs": 15000, "bridgeUrl": "http://127.0.0.1:8788", "registrationKeyEnv": "NEUROBRO_BRIDGE_REGISTRATION_KEY" },
+  "telegram": {
+    "command": "C:/PATH/TO/VERIFIED/python.exe",
+    "args": ["C:/PATH/TO/REPO/packages/personal-agent/tools/tdlib_sidecar.py", "--library", "C:/PATH/TO/VERIFIED/tdjson.dll", "--expected-sha256", "REPLACE_WITH_VERIFIED_BINARY_SHA256"],
+    "databaseDirectory": "C:/PATH/TO/PRIVATE/STATE/telegram/database",
+    "filesDirectory": "C:/PATH/TO/PRIVATE/STATE/telegram/files",
+    "apiIdEnv": "NEUROBRO_TG_API_ID",
+    "apiHashEnv": "NEUROBRO_TG_API_HASH"
+  },
+  "computer": { "enabled": false, "command": "C:/PATH/TO/VERIFIED/codex.exe", "args": ["app-server"], "projects": [] },
+  "tools": { "port": 8787 },
+  "artifacts": { "pythonExecutable": "C:/PATH/TO/VERIFIED/python.exe" },
+  "sourceScopes": []
+}

@@ -1,0 +1,4 @@
+name: neurobro-trusted-bridge
+version: 0.1.0
+description: Scoped broker tool with immutable trusted runtime session binding
+author: Neurobro

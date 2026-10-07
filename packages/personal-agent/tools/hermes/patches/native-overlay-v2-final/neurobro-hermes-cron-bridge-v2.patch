@@ -1,0 +1,385 @@
+--- a/cron/jobs.py
++++ b/cron/jobs.py
+@@ -1,5 +1,9 @@
+ """Cron job storage: ~/.hermes/cron/jobs.json; output in
+ ~/.hermes/cron/output/{job_id}/{timestamp}.md"""
++
++NEUROBRO_CRON_PROTOCOL_VERSION = 1
++NEUROBRO_CRON_PATCH_ID = 'neurobro-hermes-cron-bridge-v2'
++NEUROBRO_CRON_SOURCE_PIN = '8d5e3e412138342e8bf30443e72bd4e6a9abd057'
+ 
+ import contextlib
+ import copy
+@@ -417,7 +421,7 @@
+ 
+ # Fields that must never change after creation: ``id`` is a path component under OUTPUT_DIR, so an
+ # update could leak ``../escape``/absolute/nested values into output writes/deletes.
+-_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
++_IMMUTABLE_JOB_FIELDS = frozenset({"id", "required_admission", "admission_key"})
+ 
+ 
+ def _job_output_dir(job_id: str) -> Path:
+@@ -1835,6 +1839,8 @@
+     paused_reason: Optional[str] = None,
+     pinned: bool = False,
+     interpreter: Optional[str] = None,
++    required_admission: Optional[str] = None,
++    admission_key: Optional[str] = None,
+ ) -> Dict[str, Any]:
+     """Create a new cron job and return the stored record.
+ 
+@@ -1846,6 +1852,17 @@
+     incompatible with ``no_agent``). reasoning_effort: per-job pin; capability NOT validated.
+     interpreter: absolute/``~`` Python for ``.py`` script/monitor_script, validated at run time
+     (a venv can be rebuilt or moved after creation)."""
++    # Trusted host binding metadata; model-facing cron HTTP/tool schemas do not
++    # expose these fields. They are immutable after creation.
++    if required_admission is not None and (
++        not isinstance(required_admission, str)
++        or re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", required_admission) is None
++    ):
++        raise ValueError("Invalid required cron admission namespace")
++    if admission_key is not None and (
++        not isinstance(admission_key, str) or not admission_key or len(admission_key) > 512
++    ):
++        raise ValueError("Invalid trusted cron admission key")
+     if not isinstance(paused, bool):
+         raise ValueError("paused must be a boolean.")
+     if paused_reason is not None and not isinstance(paused_reason, str):
+@@ -1933,6 +1950,7 @@
+     for key, value in (
+         ("attach_to_session", normalized_attach), ("reasoning_effort", normalized_reasoning_effort),
+         ("failure_deliver", f["failure_deliver"]), ("interpreter", f["interpreter"]),
++        ("required_admission", required_admission), ("admission_key", admission_key),
+     ):
+         if value is not None:
+             job[key] = value
+@@ -3392,13 +3410,20 @@
+     return deleted
+ 
+ 
+-def save_job_output(job_id: str, output: str):
++def save_job_output(job_id: str, output: str, *, execution_id: Optional[str] = None):
+     """Save job output to file."""
+     ensure_dirs()
+     job_output_dir = _job_output_dir(job_id)
+     _ensure_cron_dir(job_output_dir)
+     _secure_dir(job_output_dir)
+-    output_file = job_output_dir / f"{_hermes_now().strftime('%Y-%m-%d_%H-%M-%S')}.md"
++    if execution_id is not None:
++        if not isinstance(execution_id, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", execution_id) is None:
++            raise ValueError("Invalid cron execution output identity")
++        # Native owner ID, not timestamps or model filenames. Separate fires
++        # cannot overwrite one another's result inside the same second.
++        output_file = job_output_dir / f"execution-{execution_id}.md"
++    else:
++        output_file = job_output_dir / f"{_hermes_now().strftime('%Y-%m-%d_%H-%M-%S')}.md"
+     atomic_write_text(output_file, output, tmp_prefix=".output_", mode=0o600)
+     _secure_file(output_file)
+     # Bound per-job output growth so long-running deploys don't fill the disk (#52383).
+--- a/cron/scheduler.py
++++ b/cron/scheduler.py
+@@ -2,7 +2,12 @@
+ A file lock (~/.hermes/cron/.tick.lock) keeps overlapping processes to one tick at a time.
+ """
+ 
++NEUROBRO_CRON_PROTOCOL_VERSION = 1
++NEUROBRO_CRON_PATCH_ID = 'neurobro-hermes-cron-bridge-v2'
++NEUROBRO_CRON_SOURCE_PIN = '8d5e3e412138342e8bf30443e72bd4e6a9abd057'
++
+ import atexit
++import hashlib
+ import concurrent.futures
+ import contextlib
+ import contextvars
+@@ -2560,6 +2565,35 @@
+ 
+ 
+ 
++def _require_cron_execution_admission(job: dict, execution_id: Optional[str]) -> Optional[str]:
++    """Required execution gate for explicitly tagged jobs, before any script/model.
++
++    This is an authority hook, not an observer. No result, an exception, any
++    refusal or a malformed result denies. Credentials stay in the trusted
++    plugin/broker; the native engine only receives an explicit admission fact.
++    """
++    namespace = job.get("required_admission")
++    if namespace is None:
++        return None
++    if (not isinstance(namespace, str)
++            or re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", namespace) is None
++            or not isinstance(execution_id, str) or not execution_id):
++        return "required_cron_execution_admission_unavailable"
++    try:
++        from hermes_cli.plugins import invoke_hook
++        results = invoke_hook(
++            "cron_execution_admission", job_id=job["id"], execution_id=execution_id,
++            task_id=f"cron:{job['id']}:{execution_id}", admission_namespace=namespace,
++            admission_key=job.get("admission_key"),
++        )
++    except Exception:
++        return "required_cron_execution_admission_unavailable"
++    if (not isinstance(results, list) or not results
++            or any(not isinstance(result, dict) or result.get("action") != "allow" for result in results)):
++        return "required_cron_execution_admission_refused"
++    return None
++
++
+ def run_job(
+     job: dict, *, defer_agent_teardown: Optional[list] = None, extra_prompt: Optional[str] = None,
+     cancel_event: Optional[_CancelEventLike] = None, execution_id: Optional[str] = None,
+@@ -2582,6 +2616,9 @@
+     job_id = job["id"]
+     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
+ 
++    admission_error = _require_cron_execution_admission(job, execution_id)
++    if admission_error is not None:
++        return False, f"# Cron Job: {job_id}\n\nError: {admission_error}\n", "", admission_error
+     early, prompt = _prepare_job_prompt(job, job_id, job_name, extra_prompt, cancel_event)
+     if early is not None:
+         return early
+@@ -3080,11 +3117,13 @@
+     incident_acked: bool = False
+     failure_incident_id: Optional[str] = None
+     side_effect_ownership_lost: bool = False
++    output_file: Optional[str] = None
++    output_sha256: Optional[str] = None
+ 
+ 
+ def _save_compose_deliver(
+     d: _RunDelivery, fence: _FireOwnership, final_response: str, output: str, *,
+-    adapters, loop, verbose: bool, execution_token,
++    adapters, loop, verbose: bool, execution_token, execution_id: Optional[str] = None,
+ ) -> None:
+     """Save output, compose the notice and deliver it (both side effects run under the fire-claim
+     fence; a lost claim raises ``_FireClaimLostDuringSideEffect`` for the caller)."""
+@@ -3095,7 +3134,10 @@
+         # remove_job() already deleted this job's output dir; saving would re-create an orphan.
+         output_file = (
+             None if self_removal_delivery_allowed(job["id"])
+-            else save_job_output(job["id"], output))
++            else save_job_output(job["id"], output, execution_id=execution_id))
++        if output_file is not None:
++            d.output_file = str(output_file.resolve(strict=True))
++            d.output_sha256 = hashlib.sha256(output_file.read_bytes()).hexdigest()
+     if verbose and output_file is not None:
+         logger.info("Output saved to: %s", output_file)
+ 
+@@ -3235,7 +3277,8 @@
+         # Failure ping left the process (or had a configured target): mark the incident alerted.
+         _mark_incident_alerted(d.failure_incident_id)
+     finish_execution(
+-        execution_id, success=d.success, error=d.error, delivery_outcome=delivery_outcome)
++        execution_id, success=d.success, error=d.error, delivery_outcome=delivery_outcome,
++        output_file=d.output_file, output_sha256=d.output_sha256)
+     return True
+ 
+ 
+@@ -3446,7 +3489,7 @@
+         try:
+             _save_compose_deliver(
+                 d, fence, final_response, output, adapters=adapters, loop=loop, verbose=verbose,
+-                execution_token=execution_token)
++                execution_token=execution_token, execution_id=execution_id)
+         except _FireClaimLostDuringSideEffect:
+             d.side_effect_ownership_lost = True
+         finally:
+--- a/cron/executions.py
++++ b/cron/executions.py
+@@ -7,7 +7,13 @@
+ 
+ from __future__ import annotations
+ 
++NEUROBRO_CRON_PROTOCOL_VERSION = 1
++NEUROBRO_CRON_PATCH_ID = 'neurobro-hermes-cron-bridge-v2'
++NEUROBRO_CRON_SOURCE_PIN = '8d5e3e412138342e8bf30443e72bd4e6a9abd057'
++
+ import math
++import hashlib
++import re
+ import os
+ import sqlite3
+ import threading
+@@ -87,6 +93,8 @@
+         "ON executions(status, claimed_at DESC, id DESC)"
+     )
+     add_column_if_missing(conn, "executions", "delivery_outcome", "delivery_outcome TEXT")
++    add_column_if_missing(conn, "executions", "output_file", "output_file TEXT")
++    add_column_if_missing(conn, "executions", "output_sha256", "output_sha256 TEXT")
+     add_column_if_missing(conn, "executions", "scheduled_instant", "scheduled_instant TEXT")
+     conn.execute(
+         "CREATE INDEX IF NOT EXISTS idx_executions_occurrence "
+@@ -282,11 +290,55 @@
+     return record
+ 
+ 
++def _emit_execution_completion(record: Optional[Dict[str, Any]]) -> None:
++    """Observer after terminal CAS; durable row is the recovery authority.
++
++    Callback loss cannot remove output correlation: get_execution(id) returns
++    the same committed path/hash/outcome. This observer grants no capability.
++    """
++    if record is None or record.get("status") not in ("completed", "failed"):
++        return
++    try:
++        from hermes_cli.plugins import invoke_hook
++        invoke_hook(
++            "cron_execution_completed", job_id=record["job_id"], execution_id=record["id"],
++            task_id=f"cron:{record['job_id']}:{record['id']}", outcome=record["status"],
++            output_file=record.get("output_file"), output_sha256=record.get("output_sha256"),
++            error=record.get("error"),
++        )
++    except Exception:
++        pass  # Observation must never rewrite or retry native execution state.
++
++
++def _validate_execution_output(output_file: Optional[str], output_sha256: Optional[str]) -> tuple:
++    if output_file is None and output_sha256 is None:
++        return None, None
++    if (not isinstance(output_file, str) or not isinstance(output_sha256, str)
++            or re.fullmatch(r"[0-9a-f]{64}", output_sha256) is None):
++        raise ValueError("Incomplete cron output receipt")
++    path = Path(output_file)
++    if not path.is_absolute() or path.is_symlink() or not path.is_file():
++        raise ValueError("Invalid cron output file")
++    resolved = path.resolve(strict=True)
++    root = get_hermes_home().resolve() / "cron" / "output"
++    if not resolved.is_relative_to(root):
++        raise ValueError("Cron output escaped native output root")
++    digest = hashlib.sha256()
++    with resolved.open("rb") as stream:
++        for chunk in iter(lambda: stream.read(65536), b""):
++            digest.update(chunk)
++    if digest.hexdigest() != output_sha256:
++        raise ValueError("Cron output hash mismatch before terminal completion")
++    return str(resolved), output_sha256
++
++
+ def finish_execution(
+     execution_id: str, *, success: bool, error: Optional[str] = None,
+     delivery_outcome: Optional[str] = None,
++    output_file: Optional[str] = None, output_sha256: Optional[str] = None,
+ ) -> Optional[Dict[str, Any]]:
+     """Write a terminal result once; terminal attempts cannot be rewritten."""
++    output_file, output_sha256 = _validate_execution_output(output_file, output_sha256)
+     now = _hermes_now().isoformat()
+     status = "completed" if success else "failed"
+     detail = None if success else (str(error) if error else "unknown failure")
+@@ -294,10 +346,11 @@
+         cur = conn.execute(
+             """UPDATE executions
+                SET status=?, finished_at=?, error=?, handoff_pending=0,
+-                   handoff_started_at=NULL, delivery_outcome=?
++                   handoff_started_at=NULL, delivery_outcome=?, output_file=?, output_sha256=?
+                WHERE id=? AND status IN ('claimed','running')
+                  AND process_id=? AND pid=?""",
+-            (status, now, detail, delivery_outcome, execution_id, _PROCESS_ID, os.getpid()),
++            (status, now, detail, delivery_outcome, output_file, output_sha256,
++             execution_id, _PROCESS_ID, os.getpid()),
+         )
+         if cur.rowcount != 1:
+             return None
+@@ -305,6 +358,7 @@
+         record = _fetch(conn, execution_id)
+     _emit_execution_state(record, delivery_outcome=delivery_outcome)
+     record_cron_finish(record, delivery_outcome)
++    _emit_execution_completion(record)
+     return record
+ 
+ 
+--- a/hermes_cli/plugins.py
++++ b/hermes_cli/plugins.py
+@@ -202,6 +202,9 @@
+     # IGNORED in v1 — a plugin returning a directive-shaped dict gets a debug log so future block/rewrite
+     # adopters are discoverable once the middleware variant ships against the #64231 taxonomy.
+     "pre_command",
++    # Generic cron integration: required admission is an authority gate for
++    # explicitly tagged jobs; completion is observer-only after terminal CAS.
++    "cron_execution_admission", "cron_execution_completed",
+ }
+ 
+ # Hooks whose directive the shell-hook response parser has no channel for. VALID_HOOKS doubles as
+--- a/hermes_cli/plugins_dispatch.py
++++ b/hermes_cli/plugins_dispatch.py
+@@ -7,6 +7,7 @@
+ from __future__ import annotations
+ 
+ import asyncio
++import math
+ import contextvars
+ import copy
+ import inspect
+@@ -43,10 +44,11 @@
+     "post_tool_call", "transform_terminal_output", "transform_tool_result", "transform_llm_output",
+     "pre_llm_call", "post_llm_call", "pre_api_request", "post_api_request", "api_request_error",
+     "pre_auxiliary_call", "post_auxiliary_call", "pre_verify", "on_session_start", "on_session_end",
++    "cron_execution_admission", "cron_execution_completed",
+ }
+ 
+ # Policy hooks: timeout / still-running must fail closed (block the tool).
+-_HOOK_TIMEOUT_FAIL_CLOSED_HOOKS: Set[str] = {"pre_tool_call"}
++_HOOK_TIMEOUT_FAIL_CLOSED_HOOKS: Set[str] = {"pre_tool_call", "cron_execution_admission"}
+ # Documented parent-thread serialization contract — never run on a timeout worker (hooks.md).
+ _HOOK_CALLER_THREAD_HOOKS: Set[str] = {"subagent_stop"}
+ # After a timeout, suppress the same callback this long so a hung hook cannot pile up threads.
+@@ -164,11 +166,23 @@
+     payload; nothing new is plumbed. Deliberately not ``api_request_id`` — one API request
+     carries many tool calls, which would re-collapse the keys.
+     """
+-    for field in ("tool_call_id", "turn_id"):
++    for field in ("tool_call_id", "turn_id", "execution_id"):
+         value = kwargs.get(field)
+         if isinstance(value, str) and value:
+             return value
+     return None
++
++
++_CRON_HOOK_MAX_TIMEOUT = 30.0
++_CRON_REQUIRED_BOUND_HOOKS = {"cron_execution_admission", "cron_execution_completed"}
++
++
++def _cron_hook_timeout(hook_name: str, configured: float) -> float:
++    if hook_name not in _CRON_REQUIRED_BOUND_HOOKS:
++        return configured
++    if not math.isfinite(configured) or configured <= 0:
++        return _CRON_HOOK_MAX_TIMEOUT
++    return min(configured, _CRON_HOOK_MAX_TIMEOUT)
+ 
+ 
+ def _hook_uses_callback_timeout(hook_name: str, timeout: float) -> bool:
+@@ -221,7 +235,7 @@
+         if hook_name != "gateway_platform_event":
+             kwargs.setdefault("telemetry_schema_version", OBSERVER_SCHEMA_VERSION)
+         results: List[Any] = []
+-        timeout = _resolve_hook_callback_timeout()
++        timeout = _cron_hook_timeout(hook_name, _resolve_hook_callback_timeout())
+         use_timeout = _hook_uses_callback_timeout(hook_name, timeout)
+         fail_closed = hook_name in _HOOK_TIMEOUT_FAIL_CLOSED_HOOKS
+         for cb in self._hooks.get(hook_name, []):
+@@ -495,13 +509,24 @@
+         if hook_name != "gateway_platform_event":
+             kwargs.setdefault("telemetry_schema_version", OBSERVER_SCHEMA_VERSION)
+         results: List[Any] = []
+-        timeout = _resolve_hook_callback_timeout()
++        timeout = _cron_hook_timeout(hook_name, _resolve_hook_callback_timeout())
+         use_timeout = _hook_uses_callback_timeout(hook_name, timeout)
+         fail_closed = hook_name in _HOOK_TIMEOUT_FAIL_CLOSED_HOOKS
+         for cb in self._hooks.get(hook_name, []):
+             callback_name = getattr(cb, "__name__", repr(cb))
+             try:
+-                ret = cb(**self._hook_callback_kwargs(cb, kwargs))
++                if hook_name in _CRON_REQUIRED_BOUND_HOOKS:
++                    # Sync callbacks must not execute inline on the event loop.
++                    # Use the native daemon/custody bound for both callback kinds;
++                    # no cancellation-resistant callback can hold this path open.
++                    ret = await asyncio.to_thread(
++                        self._run_hook_callback_bounded, hook_name, cb, kwargs, timeout)
++                    if ret is _HOOK_SKIPPED:
++                        if fail_closed:
++                            results.append({"action": "block", "message": _PRE_TOOL_CALL_TIMEOUT_BLOCK_MESSAGE})
++                        continue
++                else:
++                    ret = cb(**self._hook_callback_kwargs(cb, kwargs))
+                 if inspect.isawaitable(ret):
+                     ret = await (asyncio.wait_for(ret, timeout) if use_timeout else ret)
+                 if ret is not None:

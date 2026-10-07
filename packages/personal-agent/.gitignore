@@ -1,0 +1,7 @@
+node_modules/
+.runtime/
+.runtime-tdlib/
+.artifacts/
+*.local.json
+*.sqlite*
+__pycache__/

@@ -1,0 +1,3338 @@
+{
+  "schemaVersion": 1,
+  "kind": "public-git-byte-manifest",
+  "date": "2026-10-07",
+  "sourceOnly": true,
+  "byteSurface": "Git index blobs after standard text normalization; original before-transform source hashes are recorded separately in source admissions",
+  "selfExcluded": "PERSONAL-SOURCE-MANIFEST.json",
+  "files": 665,
+  "bytes": 13428542,
+  "pathListSha256": "038923fcc9cdc7b27ac848086147070884435566946909ad1c8f9da2497fad0b",
+  "entries": [
+    {
+      "path": ".gitattributes",
+      "bytes": 19,
+      "sha256": "d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c"
+    },
+    {
+      "path": ".gitignore",
+      "bytes": 199,
+      "sha256": "836012090faadaea8d9da7814da1339bd05970fa594e589edd0dbe674820a240"
+    },
+    {
+      "path": "PERSONAL-SOURCE-ADMISSION.json",
+      "bytes": 38909,
+      "sha256": "c7d79ddc5e5ebfa99e23abc1a89855a76628f41392f7b78269be4027bf8d3879"
+    },
+    {
+      "path": "PERSONAL-VALIDATION.md",
+      "bytes": 2325,
+      "sha256": "0bde74ff686a452599baadae9de59d3a26fa8906e018430e06f4f4c65044d038"
+    },
+    {
+      "path": "README.md",
+      "bytes": 6842,
+      "sha256": "9bac700ba9bae7bcb1dbae4df2f552bef17f28117f22f6d67fb918a1d778e66d"
+    },
+    {
+      "path": "README.ru.md",
+      "bytes": 9720,
+      "sha256": "d97cba46d41d4019c604649f5497090d4ad0b05cb1ebc4ec139503c46abfa12f"
+    },
+    {
+      "path": "THIRD_PARTY.md",
+      "bytes": 2778,
+      "sha256": "d592be39e432eeaee9986ffdc15ec233d2d8fcab7f8388a4f571c8e7a6b9fc75"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-launcher-v1/Cargo.lock",
+      "bytes": 5566,
+      "sha256": "1b487f12ce661fafe50c2f28ba5a571cfa65ee2827615cf092edfc9dc457319c"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-launcher-v1/Cargo.toml",
+      "bytes": 1325,
+      "sha256": "a3751a6293c2b57087b8fce7f021491a23e1068edbda21d921db45a9e2b5ee22"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-launcher-v1/src/bin/phase3-prestart-v1.rs",
+      "bytes": 30206,
+      "sha256": "9d5a6643b1dfdfb158abfd8b5190f6ea32a5566ac4b6fdf338741e51ab768960"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-launcher-v1/src/main.rs",
+      "bytes": 324038,
+      "sha256": "15ed9f4df7293ec1d4e3b738f4aac52c6122f06a8e4672189ff3c7e016f88beb"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-launcher-v1/src/native_launcher_privilege.rs",
+      "bytes": 21656,
+      "sha256": "c72ec5e7f964ed54bf0792a360468f741616a05669cb96d68ceb94e094daa36f"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-launcher-v1/src/native_ledger_security.rs",
+      "bytes": 36729,
+      "sha256": "6acc66d2bccea48b477712f5da996f75c82eb6754dd3b0b25cef5f212a9ab461"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-launcher-v1/src/native_startup_files.rs",
+      "bytes": 18726,
+      "sha256": "d734f41f097f38bb0a46d3eb01034008a607e7b08ac275cf6da352b983d8dc3b"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-launcher-v1/tests/launcher-contract-vectors.rs",
+      "bytes": 107840,
+      "sha256": "e19e24d9c15d7234cc903145eb072216351fedd9b5ca189c5014c8b41d9503ca"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-launcher-v1/tests/launcher-windows-security.rs",
+      "bytes": 28995,
+      "sha256": "7103147e18b31a72c9323a96379226b67d77da12526e293227dd5906b8b91a3a"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-launcher-v1/tests/prestart-contract-vectors.rs",
+      "bytes": 427286,
+      "sha256": "a2449c74fcddb5a6c91ffb875a53cace05a92f56bcf04b18296756364f4e3906"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-launcher-v1/tests/prestart-windows-native.rs",
+      "bytes": 25188,
+      "sha256": "588d96d9ad7ecb88bd3e3480783d3f629636d0f4c7baaa7973f2d42df43c7d2a"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-v1/Cargo.lock",
+      "bytes": 5557,
+      "sha256": "dee357dd5e9a574b043a7ad51811d9a422b8c879fc7f531a1e0d289ff92e1acc"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-v1/Cargo.toml",
+      "bytes": 583,
+      "sha256": "969692eb2c300dbc70eee77ae1aa418c1c0c28571666f75ff862a55e3ea68bf3"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-v1/src/main.rs",
+      "bytes": 116018,
+      "sha256": "5dde86ef61352f6fc044ac64cc7a4520219e6aaa361883dfb6aa2125d07d3c2f"
+    },
+    {
+      "path": "crates/rm0032-phase3-native-observer-v1/tests/observer-contract-vectors.rs",
+      "bytes": 98459,
+      "sha256": "0a5b389f1f60a7840486dac0f36ce5d596c2309a7e13bcacb33307487b1489d3"
+    },
+    {
+      "path": "crates/rm0032-phase3-runner/Cargo.lock",
+      "bytes": 5545,
+      "sha256": "07487081db08293fb92ce23cc818d3b9e72531a5931a1fb8b8b6523e0bdee103"
+    },
+    {
+      "path": "crates/rm0032-phase3-runner/Cargo.toml",
+      "bytes": 596,
+      "sha256": "5f9ad6a53a71692dd80edaa205562d155def1bb33199ab7ed8229a1c2c93abca"
+    },
+    {
+      "path": "crates/rm0032-phase3-runner/src/main.rs",
+      "bytes": 65897,
+      "sha256": "31031466b7cbbffaa72196847b2a041797cf7d1e5ef6c26827f4fd6f9fb09fc9"
+    },
+    {
+      "path": "crates/rm0032-phase3-runner/tests/contract_vectors.rs",
+      "bytes": 5237,
+      "sha256": "4100b8a5cf168f1e9789dc5bed0216762a988cb1bf2193604bfb8855c4848d64"
+    },
+    {
+      "path": "docs/architecture.md",
+      "bytes": 4656,
+      "sha256": "b95e670045fcf34833f8b18e60f62e6dd9bc4708cc0e76dfc08b79aa8d2738b3"
+    },
+    {
+      "path": "docs/design-notes.md",
+      "bytes": 2315,
+      "sha256": "11b1171a6daa034c70c4289e36099b1b6f0086f927f52b1f01e13a84d55c16e0"
+    },
+    {
+      "path": "docs/isolation.md",
+      "bytes": 4374,
+      "sha256": "2a719424a5991bbcd9bfa277a4b78241c53ffbcff0d4719d5ce95cea4edb907d"
+    },
+    {
+      "path": "docs/personal-agent.md",
+      "bytes": 2160,
+      "sha256": "cc865e7d8783cf1b4e117c8c0de8bbeeaf32363c82556e0b2353a22b7b2b7dc1"
+    },
+    {
+      "path": "docs/publication.md",
+      "bytes": 1783,
+      "sha256": "f2e4e937255ab989e7eb3894f6d29d2421c5e595b481bd1b9e4928114ce53de0"
+    },
+    {
+      "path": "docs/testing.md",
+      "bytes": 2951,
+      "sha256": "7cb2bd39d2b3d54d54463f6d2e0c7257076cfc0c88d5bb4d8f7cd980a309c9d5"
+    },
+    {
+      "path": "packages/personal-agent/.gitignore",
+      "bytes": 88,
+      "sha256": "0b8e1d86c2f75d7976ddda4bff521419682fc91b919b4e0bb87929bb69c0b925"
+    },
+    {
+      "path": "packages/personal-agent/README.md",
+      "bytes": 8634,
+      "sha256": "6a2bc46563f277848b8084d313d679fa4863c47ddbc608dea60845aca080ac75"
+    },
+    {
+      "path": "packages/personal-agent/docs/operations.md",
+      "bytes": 18671,
+      "sha256": "60d39a49434100416f2a0097203740cc73340e3972b4ffa0426bf9b4847bb751"
+    },
+    {
+      "path": "packages/personal-agent/examples/personal-agent.json",
+      "bytes": 1114,
+      "sha256": "b5547f672286463e4ea43daa7a7c1ec455a5ff0ed3b5edf92f94a4c7a658239b"
+    },
+    {
+      "path": "packages/personal-agent/examples/runtime-bindings.json",
+      "bytes": 711,
+      "sha256": "c2e883285e12ed6d9cc63e605dcc615d192929fa5df904bfbce439f7a56a45ff"
+    },
+    {
+      "path": "packages/personal-agent/package-lock.json",
+      "bytes": 1512,
+      "sha256": "3674d29c5f8deefd207929520e41a3e986b508019bba24ca96654657fd1ef5cc"
+    },
+    {
+      "path": "packages/personal-agent/package.json",
+      "bytes": 505,
+      "sha256": "6b9c12c26077f21b192ff63b0200d098b511783d02fe10a008b30351dce8b8cf"
+    },
+    {
+      "path": "packages/personal-agent/src/app.ts",
+      "bytes": 13065,
+      "sha256": "1834d34ae9a7bac253806ef7601bdf0677f80a9a55af2b3f849057cba4e7415e"
+    },
+    {
+      "path": "packages/personal-agent/src/artifacts/create.ts",
+      "bytes": 7302,
+      "sha256": "e0f521f22551c9bdafe3c9c5ae3ae8f80b976b8de4ed8f89a252c40ed7e42787"
+    },
+    {
+      "path": "packages/personal-agent/src/artifacts/index.ts",
+      "bytes": 26683,
+      "sha256": "abc787f6af1ae92623d875e78f2715fa0a0fbd5170495cb96aea13d348decb05"
+    },
+    {
+      "path": "packages/personal-agent/src/artifacts/inspect.ts",
+      "bytes": 11999,
+      "sha256": "1cc1e3453a0c34dccc349f5636c3001fff1a04e31170f42d673466a668f1db67"
+    },
+    {
+      "path": "packages/personal-agent/src/artifacts/inspect_ooxml.py",
+      "bytes": 7999,
+      "sha256": "97762c13098be80a6637687f30b41ec39df195e7203edaed7e8659a53dc73bfd"
+    },
+    {
+      "path": "packages/personal-agent/src/artifacts/inspect_pdf.py",
+      "bytes": 6978,
+      "sha256": "aeb7d0867e326407679f379ec3e3e0bffbd397249bd4215da0d61555f0eda697"
+    },
+    {
+      "path": "packages/personal-agent/src/artifacts/mime.ts",
+      "bytes": 4888,
+      "sha256": "bdf2f7bfb28d27bf823e3dfd44bb6c3349d4023c51fc58b3ac6a91c254f9aba3"
+    },
+    {
+      "path": "packages/personal-agent/src/artifacts/paths.ts",
+      "bytes": 3821,
+      "sha256": "9db791d34477a0a6116f1ff0128863bc67569e2651733195b98f9d440e3b0da7"
+    },
+    {
+      "path": "packages/personal-agent/src/artifacts/tools.ts",
+      "bytes": 7191,
+      "sha256": "599a7dda87901fb00ba7c9d6ee0bcdd222449d6d47c6ce4169aca87df14d0e69"
+    },
+    {
+      "path": "packages/personal-agent/src/artifacts/vision.ts",
+      "bytes": 3779,
+      "sha256": "afd5bea421a6144f49bde39b2e295152366f1954ca00f6518af494819e62832d"
+    },
+    {
+      "path": "packages/personal-agent/src/capabilities/catalog.ts",
+      "bytes": 7199,
+      "sha256": "7a724fc5f81ec89cd13ac238012228e36a904f7e5812e3378ad1ee376bec2baf"
+    },
+    {
+      "path": "packages/personal-agent/src/capabilities/images.ts",
+      "bytes": 14809,
+      "sha256": "8a6f61cb24afe7c8b0ffa9ff315e59b4a6d35cb71dc4ad653dd7ed76d873c4e1"
+    },
+    {
+      "path": "packages/personal-agent/src/capabilities/index.ts",
+      "bytes": 443,
+      "sha256": "609911518b5ca127f66f533d4f5fe6a3d5997c5383cca13810c39709a7b6f3d1"
+    },
+    {
+      "path": "packages/personal-agent/src/capabilities/jobs.ts",
+      "bytes": 30212,
+      "sha256": "e0e26c695087bc2d7e0fa2ed0709a8d7d95a504dc8daed7abeb855adfe6d8f7a"
+    },
+    {
+      "path": "packages/personal-agent/src/capabilities/registry.ts",
+      "bytes": 5466,
+      "sha256": "c3c0bddc6072f3e8eace516de4b85cc07a8177c5927945cc4e083b8aa2c27324"
+    },
+    {
+      "path": "packages/personal-agent/src/capabilities/schema.ts",
+      "bytes": 3213,
+      "sha256": "2ae166f0ce0cdc8f027830f299c3ffb9124b51e018220e0cc7da554b511d6ebb"
+    },
+    {
+      "path": "packages/personal-agent/src/capabilities/server.ts",
+      "bytes": 4594,
+      "sha256": "5beaffa2c822fa91710717768d7a6de4ecb099f10c913ddb8e5338fb5a03a936"
+    },
+    {
+      "path": "packages/personal-agent/src/capabilities/telegram.ts",
+      "bytes": 23198,
+      "sha256": "c56f014b4c4e272fe9b14af2eff5c7dd163add6fa135c32f7f41d5cb8b0b3a5d"
+    },
+    {
+      "path": "packages/personal-agent/src/capabilities/types.ts",
+      "bytes": 1456,
+      "sha256": "9a83abe6db40c1e77c7bcaf51bd7063cda469b0e3372680366379e1cccfb72ec"
+    },
+    {
+      "path": "packages/personal-agent/src/capabilities/web.ts",
+      "bytes": 15548,
+      "sha256": "cc24ff9ae18a48a776ad4965b681332382e1771404eb2681f26ad42e4262b6e6"
+    },
+    {
+      "path": "packages/personal-agent/src/cli.ts",
+      "bytes": 13982,
+      "sha256": "1b4a6bf0ff26078fb229f02251031c0d4fa6d52954099194d72f121ee64165b9"
+    },
+    {
+      "path": "packages/personal-agent/src/composition.ts",
+      "bytes": 36901,
+      "sha256": "5383fdad58f9187d531e01f1d7b39f5021cbbb24570eacccf675d7d5fff685e9"
+    },
+    {
+      "path": "packages/personal-agent/src/computer/index.ts",
+      "bytes": 27973,
+      "sha256": "d3ec95a159567684ac61b9442e3bfab138830ff334c1821d46f8a90129105d92"
+    },
+    {
+      "path": "packages/personal-agent/src/computer/paths.ts",
+      "bytes": 1070,
+      "sha256": "d74315ccfd8fab9ea58c3802cf6022e6f7615ecf05c1b5b12b381335d7cd7cf7"
+    },
+    {
+      "path": "packages/personal-agent/src/computer/protocol.ts",
+      "bytes": 876,
+      "sha256": "73951b16e622f7154f722558164bce74542c62cfb32afdfa1193888382761c76"
+    },
+    {
+      "path": "packages/personal-agent/src/computer/registry.ts",
+      "bytes": 2009,
+      "sha256": "b56f3fb7146ed738e988f3512fc6e009909cc4e2a6cbbea839e207ae0cda679a"
+    },
+    {
+      "path": "packages/personal-agent/src/computer/tools.ts",
+      "bytes": 7484,
+      "sha256": "401798df68a3e3a3ec9bca1051fc73e9c35d0ad2dcd86e8ff2831627b0e0a7c8"
+    },
+    {
+      "path": "packages/personal-agent/src/computer/transport.ts",
+      "bytes": 13422,
+      "sha256": "55f2ba3c80c5c1b6f152c9078a7dbe8da4f4f14232760dc9d289fd6089cb517a"
+    },
+    {
+      "path": "packages/personal-agent/src/computer/types.ts",
+      "bytes": 2503,
+      "sha256": "29a7e4e24b5fd9c7719fc9bedd04eb925c703dbd90550cecd6e6fc7bb5329fed"
+    },
+    {
+      "path": "packages/personal-agent/src/config.ts",
+      "bytes": 10951,
+      "sha256": "781df572e55660f008b91b93e992cd8a1ef75f9a5089ad50c42bbd744237b220"
+    },
+    {
+      "path": "packages/personal-agent/src/contracts.ts",
+      "bytes": 7052,
+      "sha256": "992e90353d1c8a19c5c80943dc00f9b54a3c8b3a37ee202027a337f922174075"
+    },
+    {
+      "path": "packages/personal-agent/src/core/authority-text.ts",
+      "bytes": 1843,
+      "sha256": "e6daf92859e3497cf3d271b70d3fde03cf7e43b5e373f0620a380fa25c16a4f7"
+    },
+    {
+      "path": "packages/personal-agent/src/core/broker.ts",
+      "bytes": 13510,
+      "sha256": "0a17043553997f928252211b5167bb9914f74c4dd914d94f9d90c40d9b8f2acb"
+    },
+    {
+      "path": "packages/personal-agent/src/core/controller.ts",
+      "bytes": 60251,
+      "sha256": "180da3debb8504649169e8964a1b688004d140497114b7191c8d122ebe1f6527"
+    },
+    {
+      "path": "packages/personal-agent/src/core/index.ts",
+      "bytes": 406,
+      "sha256": "7353dbcd924cc64e10c94a46e45c6078338482472d2e30036fa44f149990c866"
+    },
+    {
+      "path": "packages/personal-agent/src/core/owner-account.ts",
+      "bytes": 930,
+      "sha256": "cd5e598180c1cbd1b3a987ebea2ffa4910679c6b24526b02eeb6a0d891c12243"
+    },
+    {
+      "path": "packages/personal-agent/src/core/store.ts",
+      "bytes": 8694,
+      "sha256": "28b58c911a6f4e831685c0258c09250394efb14c57772eb87f5742366caa7792"
+    },
+    {
+      "path": "packages/personal-agent/src/desktop-context/index.ts",
+      "bytes": 14441,
+      "sha256": "33e5c9121bcb7cc2d2b5df321a43ed6fd332d05d38e1b2fcaedac4979a03a9c8"
+    },
+    {
+      "path": "packages/personal-agent/src/desktop-context/privacy.ts",
+      "bytes": 1103,
+      "sha256": "038f07cada7c30c09abc336623631c9c4dbc90c8b7b11fcfb5c550b61797bbe3"
+    },
+    {
+      "path": "packages/personal-agent/src/desktop-context/tools.ts",
+      "bytes": 2663,
+      "sha256": "5325b758a05af050c63d926b30ff5ea9529a28aa4bab7e076978479c0f66fe2a"
+    },
+    {
+      "path": "packages/personal-agent/src/desktop-context/types.ts",
+      "bytes": 1238,
+      "sha256": "46b50e274c2a115eb5297ed3801ffe607898abae1cecf504d7a048274554086b"
+    },
+    {
+      "path": "packages/personal-agent/src/documents/index.ts",
+      "bytes": 17188,
+      "sha256": "773732d495940d76319dae304b0348d8dabc8cadad7c4ee4992184216ea10bae"
+    },
+    {
+      "path": "packages/personal-agent/src/documents/tools.ts",
+      "bytes": 7511,
+      "sha256": "f20d38868d2206a9420e6b62752800b20536499814ede97e731f911e8c518368"
+    },
+    {
+      "path": "packages/personal-agent/src/github/index.ts",
+      "bytes": 424,
+      "sha256": "6540479b18e9272a09ebfed23c6f3421a0c1b722450a0ed5093378a3e180af03"
+    },
+    {
+      "path": "packages/personal-agent/src/github/service.ts",
+      "bytes": 21382,
+      "sha256": "7bee084f5f95833105272d03c59eca1103be1e2d54855f93f0c7e5025757c4b2"
+    },
+    {
+      "path": "packages/personal-agent/src/github/tools.ts",
+      "bytes": 3327,
+      "sha256": "38d3b7901802f71702dbc03a6fca074d9ec4dd15cd68398d18135b84d6bfd94c"
+    },
+    {
+      "path": "packages/personal-agent/src/github/transport.ts",
+      "bytes": 3487,
+      "sha256": "08f6a321a84f76b5b4535c5404fa56c571aa212c661dee5c9e7f24ab840f8e66"
+    },
+    {
+      "path": "packages/personal-agent/src/hermes/cognition.ts",
+      "bytes": 10993,
+      "sha256": "b7307ae0ddaa218c976050964f75bad094330ab66d150a503ee6ef859a40a87f"
+    },
+    {
+      "path": "packages/personal-agent/src/hermes/index.ts",
+      "bytes": 26828,
+      "sha256": "2addf10addc63e4add2379b3e8f3bfbba56d7936561490ce10caf79e19f76cd0"
+    },
+    {
+      "path": "packages/personal-agent/src/hermes/schedules.ts",
+      "bytes": 33078,
+      "sha256": "d965d3fa12b3b847dfb9575cdf8894981927d8ec6eaa5eebf265d7800b30c136"
+    },
+    {
+      "path": "packages/personal-agent/src/host.ts",
+      "bytes": 79444,
+      "sha256": "b67b07d2b284f1656088bec786c7cf1f16a57bb68b78c55a0a36df6571c21bea"
+    },
+    {
+      "path": "packages/personal-agent/src/ingress.ts",
+      "bytes": 2089,
+      "sha256": "88f5a15212b85a98c736f1dd50212384eba139fc41165a0f44f0f142604cdd1b"
+    },
+    {
+      "path": "packages/personal-agent/src/lease.ts",
+      "bytes": 2088,
+      "sha256": "499b976d10cc9e9e838145b50c0537d0c2e033576e0e9a37c19c023a0b1fc0b6"
+    },
+    {
+      "path": "packages/personal-agent/src/memory/index.ts",
+      "bytes": 32685,
+      "sha256": "78ab328fe5a26dbe42d33dbc181556a34857bf32d1d8613da56a79dbedc228f3"
+    },
+    {
+      "path": "packages/personal-agent/src/memory/tools.ts",
+      "bytes": 5303,
+      "sha256": "7961a7c161095c5edefc2ca43de4f6a1d5dea68e7eb278c8c1ad852867d82a38"
+    },
+    {
+      "path": "packages/personal-agent/src/monitor-source.ts",
+      "bytes": 19361,
+      "sha256": "ade8a2411ad34515481810fb8b029812f593de634846d90e9995d9c908c25e5f"
+    },
+    {
+      "path": "packages/personal-agent/src/observation/index.ts",
+      "bytes": 59,
+      "sha256": "7393b9b04398af41a6983e5f9319337b53f863d54dd6fbe16abdfea00109e4ea"
+    },
+    {
+      "path": "packages/personal-agent/src/observation/monitors.ts",
+      "bytes": 46656,
+      "sha256": "ffa2218e44698e8ba7e53c91d80cad288979762330142f6514a4c1acdc84dd0e"
+    },
+    {
+      "path": "packages/personal-agent/src/observation/tools.ts",
+      "bytes": 5411,
+      "sha256": "9e37aa36c88a88025977042192712d55b89d32f9505c3e29260620172b2267f7"
+    },
+    {
+      "path": "packages/personal-agent/src/onboarding.ts",
+      "bytes": 17798,
+      "sha256": "3a00f667c9ff486edab7e6cb2ad46fa28f27d66e3a095e4aa291205c4b269687"
+    },
+    {
+      "path": "packages/personal-agent/src/outreach/index.ts",
+      "bytes": 33214,
+      "sha256": "7dda25475fa1a35666324f2c265f0fc80c2c886762a553e9c71fc51f3ca46fc0"
+    },
+    {
+      "path": "packages/personal-agent/src/outreach/replies.ts",
+      "bytes": 14552,
+      "sha256": "669cf09d292042cfc87b292ecf3a153b293ff8d185a42b8c613052fc8264b88f"
+    },
+    {
+      "path": "packages/personal-agent/src/owner-controls/directives.ts",
+      "bytes": 3382,
+      "sha256": "b010d2388dfcf78dc2a34ea91f7110e41e5e53c6fc41fdf83b587a1a6299d137"
+    },
+    {
+      "path": "packages/personal-agent/src/owner-controls/index.ts",
+      "bytes": 309,
+      "sha256": "2a0bb3c9fe33f96e7d9c5f24185f9c6531e24cee23c4ea73be3022b88dd1823d"
+    },
+    {
+      "path": "packages/personal-agent/src/owner-controls/presentation.ts",
+      "bytes": 2339,
+      "sha256": "ae7dc136fbe664e1b8a673f9380064731565076eee93f7867e117c59d57a6501"
+    },
+    {
+      "path": "packages/personal-agent/src/owner-controls/service.ts",
+      "bytes": 34935,
+      "sha256": "aca9a7c2afb6e6ff44bb61ba65c311dd5cc6174f2d64bf70587a22cda8f53b2c"
+    },
+    {
+      "path": "packages/personal-agent/src/owner-controls/tools.ts",
+      "bytes": 3043,
+      "sha256": "58499fdc60633610a3f4bb60f65de1121a8383488a6131393cff7530f934e9c4"
+    },
+    {
+      "path": "packages/personal-agent/src/owner-controls/types.ts",
+      "bytes": 4249,
+      "sha256": "144d41085bb29c77663dc5000265828f930030fd09eb7596405e7bb58025f048"
+    },
+    {
+      "path": "packages/personal-agent/src/prompts.ts",
+      "bytes": 1646,
+      "sha256": "5f7c4c0ebbaa65d62a3cbe085d2e517db9f3650ccd98f1b833ca2dc98d1f8ea0"
+    },
+    {
+      "path": "packages/personal-agent/src/schedule-delivery.ts",
+      "bytes": 13545,
+      "sha256": "aa1e7d926467170b3c86f9886c430dccd8f2ead68957d3f60799c9f8f0a957b5"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/LICENSE.TDLib",
+      "bytes": 1338,
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/README.md",
+      "bytes": 6197,
+      "sha256": "cbbdcca490d580eb9e7b30a44c3b68d55c10f2aff3640b49e1ba37af8feed527"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/exploration.ts",
+      "bytes": 6174,
+      "sha256": "d0a040bc954600856b994b0688198b610ff322711e4b6642de28167d76363681"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/folders.ts",
+      "bytes": 4993,
+      "sha256": "ba6073dbfef9e1f3d584e2b55a1a226afe0200333dc7a3003fb42d578c4d6c97"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/identity.ts",
+      "bytes": 5346,
+      "sha256": "cad12dde161444d05042087a3e6516cd53a2ad5aa3338522b08be1f6d8662a75"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/index.ts",
+      "bytes": 63916,
+      "sha256": "993ac09ea59e9da5a8445e46d9d66759b428b2065bd0d909d7ef42bcfca3e3a8"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/inventory.ts",
+      "bytes": 17381,
+      "sha256": "acad70bee08576ccc009abc74a304b252f162b46f260ae9cb4881df903d23634"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/requests.ts",
+      "bytes": 9473,
+      "sha256": "c63664a261d82747a9c75f1d7fae880f7c5198d4ee58a7d4b291a3ae9b53fa5f"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/schema-source.json",
+      "bytes": 293,
+      "sha256": "53b10cb4b86c91248685d9bde0fbec9e60ac13572c263a773ae0887c1b9a0617"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/schema.ts",
+      "bytes": 2678,
+      "sha256": "6d764b6b0002272f2912fe38433feefcabbfd6e490c4802da3d8928124275d42"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/store.ts",
+      "bytes": 6686,
+      "sha256": "1b1180eecdfe0c680c4f7feaa8ad14bd365c289c7f0e07eb8e59ab0388259e1e"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/td_api.tl",
+      "bytes": 1152606,
+      "sha256": "bc998a2c6dd7e0a8a250dd732ac64d7a7d5e8efdc47760c899cf1aa4660037d0"
+    },
+    {
+      "path": "packages/personal-agent/src/telegram/transport.ts",
+      "bytes": 12232,
+      "sha256": "bf547d28d9326e9742dda51f937fe0e56836adb4b6174d4f617b03d4f1061036"
+    },
+    {
+      "path": "packages/personal-agent/test/artifacts/create.test.ts",
+      "bytes": 11706,
+      "sha256": "4c562f7a80997ea4c4dc50481241e4f93339ee91b9d8a02730bf85bbe99c27bb"
+    },
+    {
+      "path": "packages/personal-agent/test/artifacts/inspect.test.ts",
+      "bytes": 9679,
+      "sha256": "b5f5d92248a7de26d6812989a2d52d94974f5767335034bc81449ba6014271fe"
+    },
+    {
+      "path": "packages/personal-agent/test/artifacts/pdf.test.ts",
+      "bytes": 9473,
+      "sha256": "ddda4eeb114bbe4f77637e5dd389d18eb1a8bf38f1504f0351b2b2cddd6cfec9"
+    },
+    {
+      "path": "packages/personal-agent/test/artifacts/store.test.ts",
+      "bytes": 21637,
+      "sha256": "355bb8cae138689286bea85cd2d09a71edb497cd9cb39b20224432eed71e2195"
+    },
+    {
+      "path": "packages/personal-agent/test/artifacts/tools.test.ts",
+      "bytes": 7418,
+      "sha256": "0b6a678eaab3fcf5d50d45e33bfe2042dd66b339f79469ec373e805a3db71159"
+    },
+    {
+      "path": "packages/personal-agent/test/artifacts/vision.test.ts",
+      "bytes": 6849,
+      "sha256": "580b2f535d2b6ddc722ece6ba1be03036f09d8b085d10d5080806775e933b79c"
+    },
+    {
+      "path": "packages/personal-agent/test/capabilities/http-contract.test.ts",
+      "bytes": 6111,
+      "sha256": "57d3b22c69e8dd8f09a47688e15319a467fbeb1e1fe2feab5d943471d4b51308"
+    },
+    {
+      "path": "packages/personal-agent/test/capabilities/images.test.ts",
+      "bytes": 14712,
+      "sha256": "1a0efa82532a79ed9caca5dfbd6b239356984f44d75dadfd244f47198ff8ea4a"
+    },
+    {
+      "path": "packages/personal-agent/test/capabilities/jobs.test.ts",
+      "bytes": 27173,
+      "sha256": "448f22212529823ece1135ddbedcf152630b927c6dabdbf4a43cdbfec7f0f7ac"
+    },
+    {
+      "path": "packages/personal-agent/test/capabilities/registry.test.ts",
+      "bytes": 16652,
+      "sha256": "90bd778434dd98b100dc924f004d65e39cf06111758a60ca4d239942c605760e"
+    },
+    {
+      "path": "packages/personal-agent/test/capabilities/telegram-folders.test.ts",
+      "bytes": 2760,
+      "sha256": "2e73c8cd9e4d7d15eeb61cb598bc7cd3471834c9bc5bf94b2d1564876b36e8f8"
+    },
+    {
+      "path": "packages/personal-agent/test/capabilities/telegram-lineage.test.ts",
+      "bytes": 12901,
+      "sha256": "f04cc218902d5fa7435d6c96961a73db166b2672ef826e46903722ec65d49bf0"
+    },
+    {
+      "path": "packages/personal-agent/test/capabilities/web.test.ts",
+      "bytes": 10335,
+      "sha256": "6b52f8dcaa7f1532a10c2c6f1974d7695ee58d5bafcb45645c1fc47ed45ab98c"
+    },
+    {
+      "path": "packages/personal-agent/test/computer/adapter-server.mjs",
+      "bytes": 4027,
+      "sha256": "d28eb6af531d14dfb95124728c73f2ccdaeb7d6eebfca6e474f4f6ce23d41714"
+    },
+    {
+      "path": "packages/personal-agent/test/computer/adapter.test.ts",
+      "bytes": 15098,
+      "sha256": "ffa54ac1998b56bb515f5ff293d83ab24a517dde18f06a3ba87cdeb922a08338"
+    },
+    {
+      "path": "packages/personal-agent/test/computer/fixture-server.mjs",
+      "bytes": 3388,
+      "sha256": "8337c67ef79c817937802436c30aae61716427a5f9f25c07f7d9dc543bc8bdb7"
+    },
+    {
+      "path": "packages/personal-agent/test/computer/tools.test.ts",
+      "bytes": 10371,
+      "sha256": "0d1029c050c7986c4a56310a6ca6acda5e5bebbf748e4774727ac5fa12a5739f"
+    },
+    {
+      "path": "packages/personal-agent/test/computer/transport.test.ts",
+      "bytes": 10948,
+      "sha256": "35c3155b3c70056f7a9685eea374a79a97d1746c8471e6a654efb01597cf6de0"
+    },
+    {
+      "path": "packages/personal-agent/test/config.test.ts",
+      "bytes": 2700,
+      "sha256": "2c67019cd3332d3620a98b1bda7b1c52cd1df1b6cde4e202db8a1d7974f0c8a8"
+    },
+    {
+      "path": "packages/personal-agent/test/core/broker.test.ts",
+      "bytes": 7513,
+      "sha256": "c7505982b14dd5e4446de858ca2626117b6c5668dce84436a8033b2abfa553bb"
+    },
+    {
+      "path": "packages/personal-agent/test/core/controller.test.ts",
+      "bytes": 54221,
+      "sha256": "3c937dc5f9234c59721326ea4dfe21453909f39f859f67ee9bf6d7bb56f81d3b"
+    },
+    {
+      "path": "packages/personal-agent/test/core/hooks.test.ts",
+      "bytes": 6086,
+      "sha256": "e10e35b6252deda4b6a411a859fb24c33f5922520697286f9fafcfe9a4d0ba51"
+    },
+    {
+      "path": "packages/personal-agent/test/core/origin-monitor-expiry.test.ts",
+      "bytes": 12118,
+      "sha256": "4ab8ceb85817b3ef2237a3d3a898f21e5183f1e77ecc9f805f134ba041fca553"
+    },
+    {
+      "path": "packages/personal-agent/test/core/owner-hooks.test.ts",
+      "bytes": 19059,
+      "sha256": "37bc8e75dbe627738b91714d48fecb17e8f201e62a6e1b534c11442c924969d5"
+    },
+    {
+      "path": "packages/personal-agent/test/core/store.test.ts",
+      "bytes": 9637,
+      "sha256": "4f0964b3bf1ad2547c767ec59ccd31ee73eb8c4d03c33308bd2681c1e2bd6fd9"
+    },
+    {
+      "path": "packages/personal-agent/test/desktop-context/context.test.ts",
+      "bytes": 11655,
+      "sha256": "747cf40cf8595a1ad79631beb02187eaefb47ce186c48972b4569f9e6ddf3b75"
+    },
+    {
+      "path": "packages/personal-agent/test/documents/library.test.ts",
+      "bytes": 13438,
+      "sha256": "804b34d476cedf134d41656da47de14f48b519cbc5483975c184692690445537"
+    },
+    {
+      "path": "packages/personal-agent/test/documents/tools.test.ts",
+      "bytes": 10560,
+      "sha256": "b1ef372309a29fb905f962fbc390d307de33a38f0d7b3b05c76f71f94b56f84d"
+    },
+    {
+      "path": "packages/personal-agent/test/github/github.test.ts",
+      "bytes": 16443,
+      "sha256": "b6c10a0ad40ccf4f048c01626dfb5400a03a7a267a72fdb39b05db2eb712f83e"
+    },
+    {
+      "path": "packages/personal-agent/test/github/live-read.mjs",
+      "bytes": 1284,
+      "sha256": "fc2d510abc7bf58b615f860d2cb3b9bc22372355f41c9371b2ec8771694877e9"
+    },
+    {
+      "path": "packages/personal-agent/test/hermes/adapter.test.ts",
+      "bytes": 15422,
+      "sha256": "b30ba83fb025b26139622958d32b6611054a10f4a0469dec68676d75dab009bd"
+    },
+    {
+      "path": "packages/personal-agent/test/hermes/bridge_test.py",
+      "bytes": 26307,
+      "sha256": "0d102790b2035420f183788e50741b0789334c57ca56e74250aa086fe3dc518d"
+    },
+    {
+      "path": "packages/personal-agent/test/hermes/cognition.test.ts",
+      "bytes": 6663,
+      "sha256": "e97f911787c88dbbb78dc63dd7fbf91165d91e4ea3479fed8cb606e15d142677"
+    },
+    {
+      "path": "packages/personal-agent/test/hermes/cognition_test.py",
+      "bytes": 18222,
+      "sha256": "d418be2dbf55679c8943d5cd2281687feec1c95bc3aba0c0a8992d13900ae8e2"
+    },
+    {
+      "path": "packages/personal-agent/test/hermes/cron_extension_test.py",
+      "bytes": 17563,
+      "sha256": "fb570773201cfeedca6ccda323df3a676615f34548a16eaeb9c3dfe3e0690504"
+    },
+    {
+      "path": "packages/personal-agent/test/hermes/cron_patch_test.py",
+      "bytes": 23304,
+      "sha256": "ede42a9996e157d5a5c4da4221f96a31aad071bd0497232c19e1790e5f8ddedd"
+    },
+    {
+      "path": "packages/personal-agent/test/hermes/management_transport_test.py",
+      "bytes": 11907,
+      "sha256": "dad3784c22df654087e40efd01d6579fe776a0900d4f868b769eb4ccfbc3d3a0"
+    },
+    {
+      "path": "packages/personal-agent/test/hermes/native_cron_lifecycle_test.py",
+      "bytes": 10387,
+      "sha256": "5401926c3d2bbf6beb974d0e7fe599a2d2cb9ff53e998bea3bc5f449a1b4bb8d"
+    },
+    {
+      "path": "packages/personal-agent/test/hermes/schedules.test.ts",
+      "bytes": 35696,
+      "sha256": "7a073f626bcdddfeb6a4009ec84907230b60f97fe8184a272815dd8a486d36c7"
+    },
+    {
+      "path": "packages/personal-agent/test/host-hardening.test.ts",
+      "bytes": 7637,
+      "sha256": "f18bc5f750155882fee394f34c1d1e44c38ef81d8b9a8f89529b75e53925589a"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/acknowledgement-edit.test.ts",
+      "bytes": 11289,
+      "sha256": "21cc9b373d17174df978f51664c95ac9e5cd9b6ed35a58f81f0536918f01a1e3"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/application.test.ts",
+      "bytes": 4365,
+      "sha256": "1f0c5103bdb1850cbcefa4782738af46c747896a5a7bbeb06881700927d2c615"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/continuous-monitor.test.ts",
+      "bytes": 40243,
+      "sha256": "4652f68b04dcc31306124aadaae86869a1f812abcf17bedee4aea7ebda2088d9"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/host-context.test.ts",
+      "bytes": 53997,
+      "sha256": "3b583599859c3a4fa6d6215a4f32eae93789c685d5d900b88a980a51900e36aa"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/host-lifecycle.test.ts",
+      "bytes": 24272,
+      "sha256": "4793261f9ba639d5e964c91e9056756156f772e56b9aadc2c414b08b045d833a"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/host.test.ts",
+      "bytes": 8673,
+      "sha256": "81a89e8d82753191aabd03981476601ade61ee3aa4ecb5e88b60de330ad277c1"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/ingress.test.ts",
+      "bytes": 1716,
+      "sha256": "87a1b5d7c198a3d72de682a0dc4b720e0f73aac06acd3b66e53809ec5d415b3e"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/lease.test.ts",
+      "bytes": 2706,
+      "sha256": "9f3c3a41739eee8c103be75cc30665e8c73400333af21c1e7872a4bd0c5e1f2c"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/monitor-source-ordering.test.ts",
+      "bytes": 7816,
+      "sha256": "27c7d575b5183285849caa5bde1343cdbf48d78527aa6a8dbbc6478726e48662"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/monitor-source.test.ts",
+      "bytes": 21530,
+      "sha256": "566524cc203a88e3f4d748b00e8a0ae300911f4315a5f65a428f70b4aed8e17c"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/personal-workflows.test.ts",
+      "bytes": 75198,
+      "sha256": "9097c8cc1820ebdcbb74f21f00460cb4221b6018b3de2dddeef15e244811e0da"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/schedule-delivery.test.ts",
+      "bytes": 12996,
+      "sha256": "743ca11bc8c17bd26b2a57612b788ca67a1bb720a1c578021d077cfd1e576543"
+    },
+    {
+      "path": "packages/personal-agent/test/integration/tdlib-fixture.mjs",
+      "bytes": 2401,
+      "sha256": "4caf9cb5ae8c7762563e1c74881fe4369f26ea18c8a8ab8e31e6753afff251e9"
+    },
+    {
+      "path": "packages/personal-agent/test/memory/store.test.ts",
+      "bytes": 16014,
+      "sha256": "b2a9c1312891d360f59c1baaaf3cfd1562a08f8602cad983f172769a27e83162"
+    },
+    {
+      "path": "packages/personal-agent/test/memory/tools.test.ts",
+      "bytes": 3218,
+      "sha256": "5489741a9d6dcef4eab8745d5d9fb61d35795b9a6bba05513d808cd796e7f51b"
+    },
+    {
+      "path": "packages/personal-agent/test/onboarding/diagnostics.test.ts",
+      "bytes": 5899,
+      "sha256": "336de57472c304c154a0707da4aee6f6977ac3049ef700255ef8d53d706d059b"
+    },
+    {
+      "path": "packages/personal-agent/test/onboarding/onboarding.test.ts",
+      "bytes": 15759,
+      "sha256": "f2dac82d7ed9467e1b491187addda5dbd4085f00d9008de116e1f13f45d1433b"
+    },
+    {
+      "path": "packages/personal-agent/test/ops/engine-profile.test.ts",
+      "bytes": 2557,
+      "sha256": "d4894e31ec5720d5b851a098c838c73f960d3cbfa70163566ddbe538f7bf4982"
+    },
+    {
+      "path": "packages/personal-agent/test/ops/launch.test.ts",
+      "bytes": 13508,
+      "sha256": "2e02e3d37f5a4b114fc21a5495b54b3e8de77ed9a17095d584f1b242aef59ef3"
+    },
+    {
+      "path": "packages/personal-agent/test/ops/operations.test.ts",
+      "bytes": 8581,
+      "sha256": "a7b4c9ce7f3a7242eb3b574671e9b81773482840ae1dfbf5a0c79e6b769a7de1"
+    },
+    {
+      "path": "packages/personal-agent/test/outreach/outreach.test.ts",
+      "bytes": 21750,
+      "sha256": "638ac46200afe4dcdb2f29b2afba56978d4bdedf69d5b81685c7c1e95053b0c2"
+    },
+    {
+      "path": "packages/personal-agent/test/outreach/replies.test.ts",
+      "bytes": 10938,
+      "sha256": "6e6fe38fc3dc5f7a31ab49c893b516698bd40fcca4ea83a3f8a6b2c9a53545e5"
+    },
+    {
+      "path": "packages/personal-agent/test/owner-controls/control-replies.test.ts",
+      "bytes": 2714,
+      "sha256": "fc413c85aba11eba67f6587aece98fe1ed8ee7552ba852eafb62b57783877b39"
+    },
+    {
+      "path": "packages/personal-agent/test/owner-controls/directives.test.ts",
+      "bytes": 6323,
+      "sha256": "8e2a8151cccae574a4e4ab6915d21fc2c6cd1a7128f61461863cba0f6b0335f7"
+    },
+    {
+      "path": "packages/personal-agent/test/owner-controls/service.test.ts",
+      "bytes": 31357,
+      "sha256": "e0cb206d0f545cc727dcf29df613151b3fdfc12e828bc3a7f713984741d8b140"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/approved-media.test.ts",
+      "bytes": 7859,
+      "sha256": "a303f0a255f30002e55c7e88db3ae40e6a18519e468ea6075bc65d70ab8288d7"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/contact-discovery.test.ts",
+      "bytes": 12679,
+      "sha256": "bc3c35cee705b9c4f5b17da7f05cce20335d964d07fd22185794a39c76c4a002"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/document-readback.test.ts",
+      "bytes": 2810,
+      "sha256": "29ca5f87b90bbcb567a053ad18efc7c7a68ad60098c9f4b267a4f6fa9a0f0c64"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/exploration.test.ts",
+      "bytes": 8219,
+      "sha256": "bbeffbdc2986d2620583c21157ad3d2e806c6a55fd67d4c0fe522cd910b0e2ad"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/fixture-sidecar.mjs",
+      "bytes": 1435,
+      "sha256": "2b58633820cd6835e532d41345fd6abf7c9f21d94fc38437228bb00103de38bf"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/fixture-tdjson.py",
+      "bytes": 2258,
+      "sha256": "fdb9bb18be0bc3f62213dbef73d5cae92e238a5c5bab179e2786895b4781e142"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/folders.test.ts",
+      "bytes": 14693,
+      "sha256": "e3805d08936bd933306d629fcc2cdee3fc6c8bcf85c5f9a45fb38c983b198d87"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/hardening.test.ts",
+      "bytes": 16223,
+      "sha256": "426f587b2f6187ee16a2e885ebfbe4a95e68b223d3cdee80b96bf0e33c036eba"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/identity.test.ts",
+      "bytes": 9650,
+      "sha256": "ce6182add0db015edd9bb73049646583bdbede761895712fc9054d96e5d48b3e"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/inventory.test.ts",
+      "bytes": 15494,
+      "sha256": "53a46b651a6ae74432051b6ed1e42e863102269181968a3896117109002644ef"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/join-readback.test.ts",
+      "bytes": 3952,
+      "sha256": "df43d136730238e5e843248b6e9ffd6e0dbd9d8d5e1105e07b8107a11d6007f2"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/message-details.test.ts",
+      "bytes": 9523,
+      "sha256": "f41183016240f1ff726cfb32e8e4dd640348103ceafae453f1095c4d1da095b5"
+    },
+    {
+      "path": "packages/personal-agent/test/telegram/telegram.test.ts",
+      "bytes": 29108,
+      "sha256": "ecf7ed37cdbbdb737d00bd16af955c25534440d797a6239abe8d829cb7ac225c"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/.gitignore",
+      "bytes": 19,
+      "sha256": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/COGNITION.md",
+      "bytes": 3988,
+      "sha256": "32916f65685d7f4b882a2f1b60ba0130c70b528a708e610c86a101c670ca47b6"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/CRON.md",
+      "bytes": 8853,
+      "sha256": "0a40da79189edf4641076fd0099d6bcdab2ccdff0cdc3532bed5ea5470f7f8df"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/README.md",
+      "bytes": 5976,
+      "sha256": "7b9f6b867fe3988621a79b9fc1d71efded18f6ad2374e203d568b2740c9d8afa"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/__init__.py",
+      "bytes": 2354,
+      "sha256": "37c7c9fb08d974bd5de2c5223169a518e3efe57cc89c2524c7275ecdde78804d"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/cognition.py",
+      "bytes": 13871,
+      "sha256": "ff38570059f9bd50a2fa208ee0b961601acff364f4bcbbf7249e1e916d1d0c05"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/cron_extension.py",
+      "bytes": 24202,
+      "sha256": "92562cc848c5212ebd81638f12a70d5873c42b6794089ee4d753350e5419fac5"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/management.py",
+      "bytes": 11603,
+      "sha256": "b5a4ba622be04942d893bbd6163b5b835cc18f834470b70a9d7749c1d4862a3f"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/neurobro_bridge.py",
+      "bytes": 10054,
+      "sha256": "0f17b2f17aa4a54b89253dae53f696e9a36115a86689ac1ebd308d8d96e111b1"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/patches/LICENSE.Hermes",
+      "bytes": 1070,
+      "sha256": "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/patches/README.md",
+      "bytes": 5504,
+      "sha256": "115ab40873ced52bfae6aecd97a0631cdbcd11fb2ad4b80fd1d9e7d47e10957e"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/patches/build_cron_patch.py",
+      "bytes": 17919,
+      "sha256": "d784462279b7e57b34bce6532ad9c48c71ece3ac8a9a7a8783606f89785a02b2"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/patches/native-overlay-v2-final/cron/executions.py",
+      "bytes": 24728,
+      "sha256": "c2aa3fa92023d53ddc3ee52dab9c2b772d2320c1d00aae08a76ba0a5a5d347d6"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/patches/native-overlay-v2-final/cron/jobs.py",
+      "bytes": 160935,
+      "sha256": "e21f8045839cc46be098585b6f01c1d4589538da34b0664741bf2fbbf0de4886"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/patches/native-overlay-v2-final/cron/scheduler.py",
+      "bytes": 221337,
+      "sha256": "92ca67b103d989b03a5e2baf88caae477d8156b908b5db4a80df1a4bedfb83ad"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/patches/native-overlay-v2-final/hermes_cli/plugins.py",
+      "bytes": 132695,
+      "sha256": "e7c7ceb615bf191e2365fc97168da5f023a1a3c078968fb4b648bf8bd5a892e1"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/patches/native-overlay-v2-final/hermes_cli/plugins_dispatch.py",
+      "bytes": 32613,
+      "sha256": "5a8297b7c87d78532b7e101b21039f177bc59db80eb4aa5b1883bdabca5c3ac9"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/patches/native-overlay-v2-final/neurobro-hermes-cron-bridge-v2.patch",
+      "bytes": 17734,
+      "sha256": "a639b671fb60466f7d93e6725b2c09819fd13f36d7d0c30e91acc451dc15e43e"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/patches/native-overlay-v2-final/patch-receipt.json",
+      "bytes": 1114,
+      "sha256": "97c6d4bcf3619f3ba06e9f92914e13ba0f9862aa96bada18d0830bc4404eb103"
+    },
+    {
+      "path": "packages/personal-agent/tools/hermes/plugin.yaml",
+      "bytes": 141,
+      "sha256": "838141ac4ad889b476d2636e0d8786aa27bf9c58500675962b93c3e1a9df2472"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/backup.ts",
+      "bytes": 10974,
+      "sha256": "2570e03f826db6b30f306eaf275f496962928cb31e7b2160e146fc5e380c3fc8"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/bootstrap.ps1",
+      "bytes": 3776,
+      "sha256": "77ae6ee46c926edeb3267e692fedca241f502ee22f1562d01f736f53584d856c"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/cli.ts",
+      "bytes": 5893,
+      "sha256": "71a0e302c0aeee4d03e282771e922d8afbdb9b466487f32859db8ccf30f75aea"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/cron-patch.ts",
+      "bytes": 2737,
+      "sha256": "f91647f93e86734685bf2ee2b84c360ed2ed3df52be52d30f7c046e3e9899cae"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/doctor.ts",
+      "bytes": 12789,
+      "sha256": "bb25a49d9357849904540e334abdd632d6493426cfcf5a45de94c70cc2f7cb68"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/engine-profile.ts",
+      "bytes": 4255,
+      "sha256": "e45e133692a413fa89a5ca2a7db7dbdf9b3351a63b11a9cc6e57bc88603786a2"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/index.ts",
+      "bytes": 236,
+      "sha256": "118d04519b7912af16ff1c8860950fb1c83791ccb4cdf21b09ff7ff704e42a44"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/launch.ts",
+      "bytes": 9156,
+      "sha256": "ce50b74f831cbf5e429c662cb79467b22f1a40925d8b3510fb4de801f6e66e92"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/paths.ts",
+      "bytes": 2995,
+      "sha256": "7df188c8a482217e64a886c75f0079283cb0b64a58ee3e7f108be7229b12c81c"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/profile.ts",
+      "bytes": 5756,
+      "sha256": "5427f91abb1bb85bb8d7f8c85f82bde63779e217aa1493925619cb60a008a8c0"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/runtime-manifest.json",
+      "bytes": 1448,
+      "sha256": "d135f2bb8153fed930bc1f5b12759c7b985fc72e283161c887480b55f390ae73"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/windows/.gitignore",
+      "bytes": 10,
+      "sha256": "6c5082c7e6de3e350189c67a1aacf757485ecc26e0a3cf96683528565f3e5f12"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/windows/LocalCredentials.ps1",
+      "bytes": 18576,
+      "sha256": "64d73c8faecfd073315b0867190d817f216d0fb1c4f3ebcb35ad781578593f92"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/windows/LocalCredentials.test.ps1",
+      "bytes": 11952,
+      "sha256": "88ddff230058a912535e8319176cdd1b1adb267f2ced443368b217b3d5c5831e"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/windows/LocalSetupWeb.ps1",
+      "bytes": 9782,
+      "sha256": "edda4018f3f5994d9cbb60cec34fa046858bc355ce8b0f046d54de4daace0432"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/windows/LocalSetupWeb.test.ps1",
+      "bytes": 7806,
+      "sha256": "e77dceffcc015cf16a8104d86aeae4bdb5d0a8b8c8a995ace732545624f5c82d"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/windows/NeurobroPersonalHost.csproj",
+      "bytes": 305,
+      "sha256": "a9bc3cb1c02e6c71fc111a5f7926c95c14c0301ffa38d96978fb127a06acfc25"
+    },
+    {
+      "path": "packages/personal-agent/tools/ops/windows/Program.cs",
+      "bytes": 9629,
+      "sha256": "7f399e64d932b20382ac73d9970c4753aed03b40cbc1eff439817d0011538fe3"
+    },
+    {
+      "path": "packages/personal-agent/tools/tdlib_sidecar.py",
+      "bytes": 14369,
+      "sha256": "3c0f9ade79aa0a05138328e71767de44c3a12ce39572fedc4d25ebfce5c45183"
+    },
+    {
+      "path": "packages/personal-agent/tsconfig.json",
+      "bytes": 305,
+      "sha256": "abfa1d7c7f2508691a65ae7763e2e7aa6394058b7810de2875e540a5539733b5"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/bench/process-boundary-benchmark.ts",
+      "bytes": 17403,
+      "sha256": "d9c20a6043064b6a9a0bbd66d4f97fa52779aa8dc0126a6690c78ea05aeac102"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/fixtures/phase3-native-observer-launcher-v1.json",
+      "bytes": 3240,
+      "sha256": "93bd1fb9315648834f07155195f49def58a128b617a6eea2953f8cca59926a67"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/fixtures/phase3-native-observer-v1.json",
+      "bytes": 18444,
+      "sha256": "5833875639f1f363851d2a412dfbd922e9bba7f3af3ddd1d128f3139d867966b"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/fixtures/process-boundary-v1.json",
+      "bytes": 4660,
+      "sha256": "1f2a0b693ed0cf8e7e020f38a4ba93bd88fb26fef7d55acaf16ad983fd581eb7"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/package.json",
+      "bytes": 937,
+      "sha256": "83e4249d86a8de9fe0ed4badadfe3390b7f1061b8be8420d20e2f4dea926557a"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/contract.ts",
+      "bytes": 26875,
+      "sha256": "d408c8033bce47f0b29ed9081b41fd0a6342f804d007e1496f293abeb25befcf"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/phase3-hardening-bootstrap-v1.ts",
+      "bytes": 15388,
+      "sha256": "3201e65eb210e6b08ae554d2449332024a7b2301bed3832c5299652a4feb3709"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/phase3-hardening-controller-core.ts",
+      "bytes": 3732,
+      "sha256": "99bd91fc54e9ea1547312e8350cd69692a876065178f2eb62136157d173c1bbc"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/phase3-hardening-controller-v2.ts",
+      "bytes": 50770,
+      "sha256": "e0b1890d2c2c075d977e05ffe0ea75685f24228dcbdc0f034b2f12965bb9a407"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/phase3-hardening-controller.ts",
+      "bytes": 50472,
+      "sha256": "5b980dedd1cde9667f88a224fffafe658a357d6d92d2a069cb51b2e41a3d1a3f"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/phase3-hardening-live-entry.mjs",
+      "bytes": 11311,
+      "sha256": "ed2dec5412c1edc049e2e2e5a2496459cb52cd08dcd299d93eef7962513cb764"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/phase3-hardening-runtime-contract-v1.d.mts",
+      "bytes": 3420,
+      "sha256": "6a2f3b597e625f82898a1821f03327367233fd2a8542d40146472e2ff1b388d3"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/phase3-hardening-runtime-contract-v1.mjs",
+      "bytes": 25265,
+      "sha256": "5dee2857cb4bb297ccc52e14b4bf9797485f19e5004888b35a8cd8759e298359"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/phase3-native-observer-adapter-v1.ts",
+      "bytes": 66488,
+      "sha256": "762c1ad55bace8d8406156db62be807cb16cd514f454edd65c412ceade6703a5"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/phase3-native-observer-production-transport-v1.ts",
+      "bytes": 29625,
+      "sha256": "1b9ba450b64b556eb54dd9703c52d1421ef3ecacf514322eb7ae5f3d6f042bde"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/rust-sidecar-adapter.ts",
+      "bytes": 26741,
+      "sha256": "d021ccbcc79c5eb6c5e835b828d63d331322c5a3e4ffaedc4de09a9ce22080b1"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/src/typescript-baseline.ts",
+      "bytes": 15456,
+      "sha256": "9cee2b073429f5a801ae2e218f8a98fe360346fd776dbc5405189491ea9f6713"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/test/contract.test.ts",
+      "bytes": 12229,
+      "sha256": "b72be14d3ca0263a86ebe3ac2114d23c4b6b4e439ab5fa00d252a7748a7716cb"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/test/faults.test.ts",
+      "bytes": 45067,
+      "sha256": "3e7bdc34dd4872da9ca8f07dd8c48775744cd0a16a81f3524d331aebc3b7f6e5"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/test/phase3-hardening-bootstrap-v1.test.ts",
+      "bytes": 20441,
+      "sha256": "43a87c14f901f1bcdfc7c0476a3283c26a4bb05b230e041a86043aced1ee9f31"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/test/phase3-hardening-controller-v2.test.ts",
+      "bytes": 99261,
+      "sha256": "247c3cfdd4e9624dc33592ef3c449aeec6184db1cc7e5059fb831f138f95eeb4"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/test/phase3-hardening-controller.test.ts",
+      "bytes": 66613,
+      "sha256": "dea9012f1e41d05f9125e57df504a5a4402918c18a1a2c975024ef93dd6edbe0"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/test/phase3-hardening-live-entry.test.ts",
+      "bytes": 16644,
+      "sha256": "c6d8ee1a177802c0c024023d42dd43ca654516b35abb3c9fb32ac03ac27993b4"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/test/phase3-hardening-runtime-contract-v1.test.mjs",
+      "bytes": 31543,
+      "sha256": "a4a26add5c9ceb9cb8556a379aebdec6cee49426f79dc85653fe96f2090b44ab"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/test/phase3-native-observer-adapter-v1.test.ts",
+      "bytes": 89880,
+      "sha256": "25aeb4ff136a0d49fd58f4da1ca44038ed28a7993aaebfeb32065dd9feaf268d"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/test/phase3-native-observer-production-transport-v1.test.ts",
+      "bytes": 27074,
+      "sha256": "68be2d7a1e4d332f66aaec020d04af58a0730d9f953d1e0c62142ebdf4f36c52"
+    },
+    {
+      "path": "packages/rm0032-phase3-runner/tsconfig.json",
+      "bytes": 390,
+      "sha256": "ed31d9571111aa2c0df5e511a746f1a39cf5d2525d8e16ba46bac0ed471584c7"
+    },
+    {
+      "path": "packages/telegram-gateway/.env.example",
+      "bytes": 311,
+      "sha256": "d41ec327a2520caa5a86d993fb76b144d509bb2fb03c057ebdb2f5a299715781"
+    },
+    {
+      "path": "packages/telegram-gateway/.gitignore",
+      "bytes": 86,
+      "sha256": "5e7d571710ea0dc9c50303425cca55ead4a5eebb77241f2e91110d13f5a2a409"
+    },
+    {
+      "path": "packages/telegram-gateway/README.md",
+      "bytes": 26014,
+      "sha256": "142c977b7d6adc41cc60e5acc034d242bb5d4e6b9b40fa08db19f23288c614c4"
+    },
+    {
+      "path": "packages/telegram-gateway/RESEARCH.md",
+      "bytes": 3405,
+      "sha256": "0ec5ed608e6a57a60a63596e7a24521d209cee510de3e12a18a7895f52d9cedd"
+    },
+    {
+      "path": "packages/telegram-gateway/config.example.json",
+      "bytes": 1352,
+      "sha256": "520e1759915c30ba0e8a654e0b83938c02aa2da401a1b316c9a189ca625f76a8"
+    },
+    {
+      "path": "packages/telegram-gateway/package-lock.json",
+      "bytes": 21314,
+      "sha256": "855d70b392a948a827419b366c4809033f990f02b8649b4b7a780bed63ecfb76"
+    },
+    {
+      "path": "packages/telegram-gateway/package.json",
+      "bytes": 2184,
+      "sha256": "f744a15042b91fb502f0bd7e70ad97a171e0f09d177681ecf465a1228b1bb8f4"
+    },
+    {
+      "path": "packages/telegram-gateway/run-account.ps1",
+      "bytes": 4034,
+      "sha256": "b8fd2826f80b0c6fd1ae996b2aaf757d604132a8afe903db3d931d1da2c222fc"
+    },
+    {
+      "path": "packages/telegram-gateway/setup-account.ps1",
+      "bytes": 4465,
+      "sha256": "7606389c2a05825978eaeed3f1b2a2b9957bcaa0ae71852d21f8394c1817a804"
+    },
+    {
+      "path": "packages/telegram-gateway/src/account-binding.ts",
+      "bytes": 6304,
+      "sha256": "71d259451551531b6adedfb28f1a66eab6c5dc1a8d2ecf62863f2651eae1b445"
+    },
+    {
+      "path": "packages/telegram-gateway/src/api/adapter.ts",
+      "bytes": 1742,
+      "sha256": "2b7e01e30e621cd7cfeb9bfa48da0380fd9716b0e67f7a8441c857a618a86a6f"
+    },
+    {
+      "path": "packages/telegram-gateway/src/api/index.ts",
+      "bytes": 592,
+      "sha256": "d547fd77483e2ae8096e2a27b5e0ef445a20e3b3da35634dfe1c5e937267d05e"
+    },
+    {
+      "path": "packages/telegram-gateway/src/api/types.ts",
+      "bytes": 907,
+      "sha256": "d09d3949954bd189b3340fa4979a4ae320de3da3aae7d7bf0c85c98526bd028f"
+    },
+    {
+      "path": "packages/telegram-gateway/src/atomic-file.ts",
+      "bytes": 691,
+      "sha256": "d7a9d728c1429990d9ba3aac3cf3b19dc46d689c572fa7b0d9d6c63ab5e1105f"
+    },
+    {
+      "path": "packages/telegram-gateway/src/auth-config.ts",
+      "bytes": 1965,
+      "sha256": "0f396f95381c9ddff55a5ffe57a8b68eff5cdf2a33e1ea02afa9f487b7cb3f6a"
+    },
+    {
+      "path": "packages/telegram-gateway/src/auth.ts",
+      "bytes": 3894,
+      "sha256": "7197f9420983a5cbc9ee5d7a73226e1379eb7962d273c008ee21b7dfbe56964e"
+    },
+    {
+      "path": "packages/telegram-gateway/src/binding-network-fence.ts",
+      "bytes": 877,
+      "sha256": "9f0bf7962497d7fbca612c38537091006cb11a5f3b031bbd7a792c11d5a5e1fe"
+    },
+    {
+      "path": "packages/telegram-gateway/src/bound-action-tools.ts",
+      "bytes": 17627,
+      "sha256": "85488ae98557df4f089b90a3044f1e5e7541ae048453b30726de3cfea1b31be6"
+    },
+    {
+      "path": "packages/telegram-gateway/src/bound-action-transport.ts",
+      "bytes": 9988,
+      "sha256": "bd9525f4e02f901b153b889253e80f270c704c76af3652ed81f446fba647f382"
+    },
+    {
+      "path": "packages/telegram-gateway/src/bound-group-reader.ts",
+      "bytes": 15565,
+      "sha256": "f447238ad1b8546f63a17190ff5bd842778daa1718200c5e538dbdab43f3caad"
+    },
+    {
+      "path": "packages/telegram-gateway/src/bound-group-tools.ts",
+      "bytes": 4250,
+      "sha256": "92458d7a557986065ea24adf6940fbf2d6ab4ef743d809d1aafa824d1a6a31c1"
+    },
+    {
+      "path": "packages/telegram-gateway/src/bound-poll-telegram.ts",
+      "bytes": 25316,
+      "sha256": "685d3a3489ea393e27e5e666bae346b761598bab2933d5109448653085ee62c3"
+    },
+    {
+      "path": "packages/telegram-gateway/src/bound-reaction-telegram.ts",
+      "bytes": 17011,
+      "sha256": "28349165a15c1cea906229195cbf7561b5abfde79be4e54648fb79dcc132219e"
+    },
+    {
+      "path": "packages/telegram-gateway/src/cli.ts",
+      "bytes": 7049,
+      "sha256": "e392c2da6d3ec3d1fdfeb5514bc9f24329f08b66023d47a4929b25d933ed8aac"
+    },
+    {
+      "path": "packages/telegram-gateway/src/config.ts",
+      "bytes": 8036,
+      "sha256": "4f44ca2b69508f0bc5ecdc1d8ec229c9d1224c5521674655f6220f97b3d8b797"
+    },
+    {
+      "path": "packages/telegram-gateway/src/conversation-references.ts",
+      "bytes": 2740,
+      "sha256": "6b09a6c98afe8e481094fa4ea29ac5665592e5fbc6030d893fcc8c14da64fd04"
+    },
+    {
+      "path": "packages/telegram-gateway/src/doctor.ts",
+      "bytes": 2727,
+      "sha256": "a5fab90e202c3b3fc183a69453518d434d9deaaa2e1b2f1ce67cafa172acf149"
+    },
+    {
+      "path": "packages/telegram-gateway/src/errors.ts",
+      "bytes": 3077,
+      "sha256": "b2f72af2a01c1f16b40aa9e7197405a3f9d5a5c9e57ccea09555f2432e042365"
+    },
+    {
+      "path": "packages/telegram-gateway/src/existing-session-lease.ts",
+      "bytes": 2589,
+      "sha256": "0a89575e54c6f5c520840b09eba8482fdf72bf43ba1c30f27ebe0f7e3ee5690a"
+    },
+    {
+      "path": "packages/telegram-gateway/src/export-crypto.ts",
+      "bytes": 4651,
+      "sha256": "45b0e39bd8705efc0e6579f081ff72f33ba474d6377f1cc6ee69244297afe773"
+    },
+    {
+      "path": "packages/telegram-gateway/src/generated-image-artifact.ts",
+      "bytes": 10512,
+      "sha256": "9471ca72b1282b550e9ce972983b1165e2d981daca416ab51abbbe6361f29465"
+    },
+    {
+      "path": "packages/telegram-gateway/src/generated-image-outbox.ts",
+      "bytes": 32183,
+      "sha256": "1b441bd281dee72410a99b6284cd35479f2c67b9b5a243814bba7bd0d3ae059e"
+    },
+    {
+      "path": "packages/telegram-gateway/src/generated-image-receiver.ts",
+      "bytes": 8371,
+      "sha256": "9651e9c7beb9face5408fe7cf96e871e494f3aaed6c118a1a6af949c7269dda9"
+    },
+    {
+      "path": "packages/telegram-gateway/src/generated-image-telegram.ts",
+      "bytes": 13283,
+      "sha256": "bfff3e2c2b068393483f5574951d693519ae43a457c715f56f72f3265e8b35b0"
+    },
+    {
+      "path": "packages/telegram-gateway/src/guardrails.ts",
+      "bytes": 5630,
+      "sha256": "1858863fd9ded06c717ff870428f210d75b0a54274483972a56ebd528a020850"
+    },
+    {
+      "path": "packages/telegram-gateway/src/ingestor.ts",
+      "bytes": 7769,
+      "sha256": "c80508ebf8daa795817a0b7ab4b4967da1b8eb87201ac4b32116c5eb2afa8029"
+    },
+    {
+      "path": "packages/telegram-gateway/src/jsonl-sink.ts",
+      "bytes": 1047,
+      "sha256": "838697986cad43bef803668f019184a5adf29eaeb6f5957c64a1e63ca8820843"
+    },
+    {
+      "path": "packages/telegram-gateway/src/pilot-conversation-adapter.ts",
+      "bytes": 12227,
+      "sha256": "20631b182fa281232222bc08e30ffba08565baf5c14c91424082c8abfa6c5411"
+    },
+    {
+      "path": "packages/telegram-gateway/src/pilot-conversation.ts",
+      "bytes": 13728,
+      "sha256": "98b1664243cb17e4604cf2d42c619730bc0bfe059cbc1d15803f676f4600f5b9"
+    },
+    {
+      "path": "packages/telegram-gateway/src/pilot-greeting.ts",
+      "bytes": 16871,
+      "sha256": "a6819aeedb949641602569cedb6e3c46e5c7c9ba749f3524bb9157de3955d657"
+    },
+    {
+      "path": "packages/telegram-gateway/src/pilot-outbox.ts",
+      "bytes": 19749,
+      "sha256": "3511856b2b504cc2f8bb6ee4e4e15c062bb2475194bcea83528cc55b9f492a56"
+    },
+    {
+      "path": "packages/telegram-gateway/src/pilot-telegram-adapter.ts",
+      "bytes": 12171,
+      "sha256": "2e22d9f902965d1e289197bc059b4a480f3b4240cbd6e6845fc28ee1f8336bca"
+    },
+    {
+      "path": "packages/telegram-gateway/src/process-lock.ts",
+      "bytes": 4623,
+      "sha256": "e9ff958747c975275711254242fcafa34b6c95caffac078805a440abdb0a261d"
+    },
+    {
+      "path": "packages/telegram-gateway/src/prompt.ts",
+      "bytes": 2898,
+      "sha256": "af66af0f54ef2c2686ff6d5cd56722522401fb1f7754158c74fa0f2698a36856"
+    },
+    {
+      "path": "packages/telegram-gateway/src/range-export.ts",
+      "bytes": 8804,
+      "sha256": "58a10c51d21853d1bb2d68759f8933cafb8b2630e0dc65cc13df0f8bfd51ded9"
+    },
+    {
+      "path": "packages/telegram-gateway/src/scheduled-text-telegram.ts",
+      "bytes": 13258,
+      "sha256": "56fe2f002c640c29eb7abb50e51832279d574c369a5cccbb2b60802b23cf7022"
+    },
+    {
+      "path": "packages/telegram-gateway/src/self-history-reader.ts",
+      "bytes": 24075,
+      "sha256": "2143c086441df966dce026cade1cef7581e95bb8f2c32a9f230b81cdbc3c972b"
+    },
+    {
+      "path": "packages/telegram-gateway/src/self-history-tool.ts",
+      "bytes": 4091,
+      "sha256": "2f4cdeb1e56ac38d718a0e158e77e1709b63e6e10339166bae7573cec190b634"
+    },
+    {
+      "path": "packages/telegram-gateway/src/session-crypto.ts",
+      "bytes": 2525,
+      "sha256": "f91299215fb851d9a5fb7ca8dd6081ff57c7a0aadd4be2e9041b1bbaf0f2b281"
+    },
+    {
+      "path": "packages/telegram-gateway/src/sole-owner-lease.ts",
+      "bytes": 3206,
+      "sha256": "e8dd7c84e4bc6ada8523300c2ff35e9210d80216a4b9815e501fa8695b59aaa5"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-action-journal.ts",
+      "bytes": 17350,
+      "sha256": "707d07d7901d3e63553f972a059c9f810a70857067ae1ede05035f501610b841"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-artifact-fetch.ts",
+      "bytes": 20250,
+      "sha256": "db25a4900b84858abdd6a8b00d606063627d4fa773a769ce1bad6b83991a4c5a"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-artifact-outbox.ts",
+      "bytes": 25439,
+      "sha256": "e664e07283d262e0ae9a3c0f93e5f7aaa4b823c836e828b0a5af893802c390e6"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-artifact-runtime.ts",
+      "bytes": 13681,
+      "sha256": "5b1923ada666291986085b85127a130f7f5a6190b9c2205720154844f45dcd91"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-artifact-telegram.ts",
+      "bytes": 22509,
+      "sha256": "cc6170dcd9cc49c33d2924f9480f07a638a103cf723ae30981827b3fc6eba947"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-artifact-tools.ts",
+      "bytes": 19151,
+      "sha256": "ef155ff4eacd8b24a35614199e47abfd6c19f9ff617dcc37a171abdff13dd559"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-artifact.ts",
+      "bytes": 13654,
+      "sha256": "1567bf8bd7cb540bd6d5bc574da8a4879df18fdcae9eaf7088be33b65b5de475"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-avatar-policy.ts",
+      "bytes": 130,
+      "sha256": "f1a7d481ee50a6d112d14ee240ff4e77d70fcdce506470d877b3f980785c6a4f"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-bound-action-runtime.ts",
+      "bytes": 14871,
+      "sha256": "e9c24898292a2ab01a5c3f9a6e29faacebc2bfd706d1d9bdeb976beee76d262b"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-chat-search.ts",
+      "bytes": 18997,
+      "sha256": "3396cf524b4acaf4fda0a5d815e5545369fd37fe56b58e823ee6c7807c272b7a"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-chronicle-note.ts",
+      "bytes": 9708,
+      "sha256": "4359a2eedc67823626f4eb2f208405f0c226fefb0f0a30ff0a602d1129b52e3e"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-community-alert-outbox.ts",
+      "bytes": 29737,
+      "sha256": "3debd47d27d6204b8738a8dfd23804766cd6993a6c38753ccef481ee42e9fea1"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-community-assessment-contract.ts",
+      "bytes": 6880,
+      "sha256": "d2407e04093b9b2733aa9e25d20d5427d3e7dc6793989870818ff68a5a79533b"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-community-assessment-port.ts",
+      "bytes": 13091,
+      "sha256": "7bfd643da3e873f80a589c9a43559664efbaec4e574b7490480f3721516bc1e9"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-community-observer-state.ts",
+      "bytes": 39147,
+      "sha256": "88b20a2c9e8f605ce66d8831b09572bb9530c2367d0e107ed12a70aff15cbaff"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-community-observer.ts",
+      "bytes": 19491,
+      "sha256": "60ffaa0a9d770c3850bb77a12d96119a692cfe6ef05a1bbf28fef2f59c632e74"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-community-settings.ts",
+      "bytes": 20750,
+      "sha256": "662b01c24798f903e19fa4e1820c89cb8de0237de7d1d5596d869d7e7af24652"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-context-restoration.ts",
+      "bytes": 8805,
+      "sha256": "de311c8397f9fb13e2a7aa12ae8739999817c7dc7f2dc671cc173764f750d430"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-context.ts",
+      "bytes": 1465,
+      "sha256": "31db049656d7b77dda7e01124f398141df553bbd58e1e57273bace72928c4301"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-conversation-adapter.ts",
+      "bytes": 135453,
+      "sha256": "db0c258c762cd75cf84067b9bea8f502ccd32c7756b803d6ed5b658e065a70c8"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-dialogue-journal.ts",
+      "bytes": 18761,
+      "sha256": "c4afd11d0e59949f90ed3200da89c2ec79da29a3c6be3efd9d12e55d804312ab"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-epoch-session.ts",
+      "bytes": 16824,
+      "sha256": "0469013376e38ed82b7768604b172befcf4242294331d56efc05be17f3f15e48"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-epoch-wire.ts",
+      "bytes": 14162,
+      "sha256": "24356fbbea78e88496e84d5c14299b5b2e825bca740f92287bd0153f6eb15492"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-generated-image-use.ts",
+      "bytes": 3906,
+      "sha256": "dc301df4d1e06a219d1da58401bd1bbd7639c121a2176e729cabc4277a644e3b"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-group-avatar.ts",
+      "bytes": 13326,
+      "sha256": "e039a1434196f8bb219e68067cba6ab4d7cb716bac7c0efbc46d82559203e930"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-analysis-attempt-store.ts",
+      "bytes": 39997,
+      "sha256": "fe1509fa7bc312def23cad63790684e9b4e7ccc858ba1585895356215b3c98c9"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-analysis-limits.ts",
+      "bytes": 633,
+      "sha256": "12911cbcc71a4eb279ba15b132bb06d1a78f135c307ba9577929d67fe2ed7545"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-analysis-planner.ts",
+      "bytes": 40597,
+      "sha256": "f18470c611be7e61ed9fc9746d0fedebd06c017e3721049018a2d94225e4b234"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-analysis-runtime.ts",
+      "bytes": 34254,
+      "sha256": "f34af6e717de541ad02b07307a1f1dbd9fadda74a0aa6422d7ec724ed16fb535"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-analysis-step.ts",
+      "bytes": 75396,
+      "sha256": "d1e6eaa7bde3193dacc3f8ead471219fe2a22bea0023cca5bda3b7f3eec5f6e1"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-analysis-store.ts",
+      "bytes": 28521,
+      "sha256": "f4dadd2194dd5018b6d98135e6d51cd4ccf5decca67db45b82b695c8df9f45a8"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-analysis-view.ts",
+      "bytes": 15409,
+      "sha256": "3a61bfb2b636cdd044a84ba2f7032ad96cebef56fd4fb411e2742d8bf3e064a5"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-chronicle-cache.ts",
+      "bytes": 25292,
+      "sha256": "ba075c73fce7e129bd9ffa67c01fa78bf06e493ee5a7702b441478753603bac0"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-chronicle-reuse-store.ts",
+      "bytes": 22064,
+      "sha256": "9f6cd83d28500be8914a5e84c8f05e1c1124864c55b32e32a2f52370ed33ee0c"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-final-report-material.ts",
+      "bytes": 7707,
+      "sha256": "987fa59dd2f472f04fc6fb909d815ec9ff60b026a0613636b127dcc2ec793692"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-final-report-store.ts",
+      "bytes": 16499,
+      "sha256": "3bc9ee2ab9ef850a9a0636e39a8535beb0beb0e1af6064cbf974a2bdb0e04fb5"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-final-report.ts",
+      "bytes": 27578,
+      "sha256": "cc1db64612550e4df79313bb2181811c33475763f2bed32cea6985a123d8ffd3"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-parallel-analysis-runtime.ts",
+      "bytes": 23737,
+      "sha256": "aed1bb4cebede3df27d2e60357d7c9a231fdda978f7e5891a03884939119865e"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-parallel-maintenance.ts",
+      "bytes": 17839,
+      "sha256": "8dfb9b441955eedd3ec391cf60af443dce4365ba4f2e63e9bd6dafa05ef7a427"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-parallel-planner.ts",
+      "bytes": 14451,
+      "sha256": "0c5d5d56707fb0885b0b87472a9e62cf19cc01a39e87ea0c8c1ff180322bd0bd"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-parallel-work-store.ts",
+      "bytes": 47790,
+      "sha256": "386ffe9d5b8b4ccef9d88c7a27e890ec5cca713463d0a445af41c057b8ddbb23"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-period-chronicle-store.ts",
+      "bytes": 11039,
+      "sha256": "7e4a6edd37f8434b30ad5d7f7900e6885f7f2180d992438643d163164bf12dfc"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-period-chronicle-turn.ts",
+      "bytes": 8392,
+      "sha256": "f9cb8589400048c316a3e415489620b496bca8318009eb617c1a888db1c81e0e"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-period-chronicle.ts",
+      "bytes": 20756,
+      "sha256": "ce951dd6475cf60c6b22ed45a6ecbd1dc0dc5edb3973fa8c80ca39ecf8699b8b"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-read-runner.ts",
+      "bytes": 13871,
+      "sha256": "8129742fb7addfe525c2ded1ede0b5f6fe3b18cb47216cc6a1494ba184d81a60"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-read-step.ts",
+      "bytes": 8761,
+      "sha256": "4c42f5817da3513a495a1d72496c100b4d169e35433f14fd7fee00712a0dae6b"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-report-quality.ts",
+      "bytes": 3679,
+      "sha256": "057cfb5d774e0768927b7c91a2670b810334b42ed033af63cffa4fe4a3ad30b8"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-source-projection.ts",
+      "bytes": 13196,
+      "sha256": "2de369619c29789f50d88616eab3ad9567a6930b1b5b6b298ab193abeaac55f1"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-context.ts",
+      "bytes": 26797,
+      "sha256": "14709bc8ec869c20bd8fdcea7764211662b8dbf79c2d0e7968d88cb91e1992ad"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-continuation.ts",
+      "bytes": 29715,
+      "sha256": "28ed0a5587d4fcd01ceb9982faaa449e151c2ddaca471b4e77c6e381ca3a7085"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-control-store.ts",
+      "bytes": 12395,
+      "sha256": "eedc9ee567dfaaf823a9910cf02744b627629022a5b4c8952ea7e7a8cfbf8455"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-delivery-recovery.ts",
+      "bytes": 11131,
+      "sha256": "635baddd79f968be8f936011fd4b4ec9c148584ac279dcce0003b9136f9134fd"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-delivery.ts",
+      "bytes": 60904,
+      "sha256": "56104c0e3b046e9b8186c57636673ac6e802f12428d19d5c06700cd2c6d24e6a"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-discovery.ts",
+      "bytes": 11434,
+      "sha256": "522c104e35eb620be096f85f769ddf6bab80fc83eb73e4971e3f5058f4191fd4"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-disposition.ts",
+      "bytes": 11420,
+      "sha256": "7f50e578872fb364167e50bd97c955d8d2c67a0bab90279d4b2d2baa32bf57d2"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-manager.ts",
+      "bytes": 29563,
+      "sha256": "ed2943d4d38f8b9ca9f8aa3104cbc045cd77d0e7219cd93f52959535808ed7fb"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-memory.ts",
+      "bytes": 8169,
+      "sha256": "ae4eac1562d7885741f7d5434295a4d5666073eadd90650652c3bfa10b32acf1"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-progress.ts",
+      "bytes": 5191,
+      "sha256": "540d063f80f3c371ccce6bce0bb85a216a82c11a921040e0885e896a3041de37"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-request.ts",
+      "bytes": 3862,
+      "sha256": "828844a9063091c023e9b9fd278dd0666aad730100e6d438c8f8239822eb82f8"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-runner.ts",
+      "bytes": 44421,
+      "sha256": "d419abe3a6a038925b2e8705958df12263bb699e489518fd548410b2448de2e2"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-runtime.ts",
+      "bytes": 13112,
+      "sha256": "b563fe5bd85eb9fa99fc6b15880afb05d8cd73a743630bd5ff3155f2266d50a6"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-store.ts",
+      "bytes": 25885,
+      "sha256": "55db7cf5d6cc3a0c03733c616d4a78375e00ac41374607f2c8622e676e32247e"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-history-task-tools.ts",
+      "bytes": 5182,
+      "sha256": "a74cca65c2088ec9a0da0e8ed467bb8c1b089d6ac375d1b1a85d99404f67a8ed"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-input-image.ts",
+      "bytes": 8836,
+      "sha256": "f84151d7f3d112bb9e18f080fbb1286835e35ba153e49e0f51c4c927c4d95fc6"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-learning-store.ts",
+      "bytes": 33264,
+      "sha256": "75cc2307212f089a7d5c7b503a2c045a69a736e490589a0b97a880dcbfd9dbc1"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-learning-tools.ts",
+      "bytes": 17950,
+      "sha256": "041822ddd2e1884432edd89d7740886c59efca411b7e13d8cc015fb2cb5de749"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-media-context.ts",
+      "bytes": 9841,
+      "sha256": "ab76b275bcc222c6dbb3df854a60a21cacb9e7e0d5f83c7e4bfc38f1ee46f186"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-media-profile.ts",
+      "bytes": 17890,
+      "sha256": "6587a82369b84129a8489e70fe0f84287fdc1823242c46883b9d9fcab3ccfc65"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-media-read-port.ts",
+      "bytes": 9195,
+      "sha256": "569e68eb9d67a479df401b9799befc2237762c61e8abea1c507361bfdca61af8"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-model-input.ts",
+      "bytes": 18500,
+      "sha256": "0f4742632479d4d9010a73862753e518eb0dbe6af02120c23c8600c656192c19"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-model-result.ts",
+      "bytes": 9194,
+      "sha256": "4a2bf612bbc33d4bafc2a43ad79108fe1784b03cee2dfa821768ba0894aca424"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-multiplex-epoch-wire.ts",
+      "bytes": 11962,
+      "sha256": "60d1709510f25ec9a1d0fe8b64dd5453c75ba966a1c262ac12bcc40b58e231e4"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-native-turn.ts",
+      "bytes": 4911,
+      "sha256": "d02b816fdb390f0a438177d15e863bc739129d44307944d7d5c6a8d52d915142"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-object-catalog.ts",
+      "bytes": 16362,
+      "sha256": "fe6d29ddf3fa7ba6cc91728f0fe873d250bdf93f552838724345098eb6b6f404"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-object-evidence.ts",
+      "bytes": 2718,
+      "sha256": "b5f093fa33ad56f8dc7eec90bd374dd4985547cfcac883b082a0681f59fcc13f"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-object-index.ts",
+      "bytes": 5780,
+      "sha256": "5b698ef2780b513e5b091fe71ebbb0d532bff714cc703f52088b3e0f95a6ae04"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-observation-tools.ts",
+      "bytes": 9812,
+      "sha256": "60c928898760bb6f5b20829418b9ad1ef2acac672bfc9987aa4c45b49f51d26e"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-observed-source-binding.ts",
+      "bytes": 9915,
+      "sha256": "29b4e57b6cee3d0f2b12ce1f3cb017d69fe5ac591ac03821b65a498df4853509"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-observed-source-policy.ts",
+      "bytes": 11661,
+      "sha256": "c3d1a5279eb45c957a8ade57fa0ddcd70e5dae6d482e7a76ec2d1e7766043c92"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-observed-source-reader.ts",
+      "bytes": 15226,
+      "sha256": "373628ce084d071db695d66ef928eb50cd5817829dc58fdb68a606a0a62b2a59"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-observed-source-tools.ts",
+      "bytes": 11729,
+      "sha256": "153fee77eecf5f3cab41172eafa580710e4a1b536d6baa6d3fc202e8679bc6b1"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-own-action-capture.ts",
+      "bytes": 9477,
+      "sha256": "390ee4ab300010fb97ed8fafe8519fdc59796a95cd1595a60dadf325479cfa53"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-own-action-checkpoint.ts",
+      "bytes": 14504,
+      "sha256": "0a9bca1eba6cf4552d6f166143f461918224652a3a8e69c876ef51f627e1fc64"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-own-action-memory.ts",
+      "bytes": 11862,
+      "sha256": "4e9ca9a1f4a6d0278c4ed4fa60003ab5aac5c4c060dce0cacf9ed561dd7a619e"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-own-action-projection.ts",
+      "bytes": 22888,
+      "sha256": "83a8eb0939dc6dcc4287081a3622631e8acac776b67d8eae0a8d5f660a428942"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-own-action-reader.ts",
+      "bytes": 27749,
+      "sha256": "03c2d9a81c928a9fbe5bf255759544bbab60d27d592633f585fba907d3cbdf21"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-parallel-epoch-session.ts",
+      "bytes": 16872,
+      "sha256": "bb141c1081738de17e8928752ed9c4961e93fa4c607b65f2c81addafccc95c44"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-repository-tools.ts",
+      "bytes": 18115,
+      "sha256": "67498e5f9c2ae7bdfaef3fb4a69a293a2918c02e991b0f159d47dceae209ab64"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-scoped-epoch-session.ts",
+      "bytes": 28323,
+      "sha256": "aba08bf82070f44a29c52447ee2822d595c51fca78a39b64093a5dc18bf8dd94"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-self-profile.ts",
+      "bytes": 13775,
+      "sha256": "87521bee440173ee55655a801e04a97201a299dd0c5611126f60e9b62f687934"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-service.ts",
+      "bytes": 96545,
+      "sha256": "7ad58011456032fbd135680906016f8674c377624f0c62f0cb98d4bb414d6dbd"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-shared-context-binding.ts",
+      "bytes": 3126,
+      "sha256": "ee31eb3fc60497dc56fa30371eaf3e20d71cb16612536e358f0de1abbdffbb2e"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-shared-context-reader.ts",
+      "bytes": 14178,
+      "sha256": "b6a22e03e69ee0925afc3d352219c55db7d3833a7deb9eec50484a0b0ed83194"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-shared-context.ts",
+      "bytes": 19039,
+      "sha256": "d8c5bf9eaa723c66ea3c1481a63b3a7ec55b83d17aedfd9267f532b4ae61b08a"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-source-archive.ts",
+      "bytes": 18780,
+      "sha256": "12937d8dde18f4f36d394acf3cfb119850cc28551d568fd9996ca6c8235e9efb"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-source-observer.ts",
+      "bytes": 7979,
+      "sha256": "e71feb2562e91964b7cafcf5ba9b9f93bf610b2dea2f3781111e776c99791901"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-state.ts",
+      "bytes": 4176,
+      "sha256": "689c6429c6e1cb3a9539c501379914cb1f43e2dbb7174e4d39392a40da64ba9d"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-tool-dispatcher.ts",
+      "bytes": 5325,
+      "sha256": "8ce99c4b93e19e929c54450c8012a7820207fe43559b2bc888bed4a2a33cd140"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-visual-input.ts",
+      "bytes": 1875,
+      "sha256": "b03c9fed04e348d300d34737c3f5eb1549753acf423097a5af7494133063ffd2"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-workspace-binding.ts",
+      "bytes": 19101,
+      "sha256": "7d3601de951da0d8443ecb8fc466fd55a59d978391e9dd911cdc400fed68bd10"
+    },
+    {
+      "path": "packages/telegram-gateway/src/standing-workspace.ts",
+      "bytes": 9023,
+      "sha256": "ba4c3b99553e0436e5f5f62ac8f23b7f1a4898aa7d7c3f784ef0641c91b41ecf"
+    },
+    {
+      "path": "packages/telegram-gateway/src/state-store.ts",
+      "bytes": 1592,
+      "sha256": "dea1c85044354f6ecb5ed4f9f0549b0e7b6a1849e3278fe49c3acdb41326370a"
+    },
+    {
+      "path": "packages/telegram-gateway/src/telegram-client.ts",
+      "bytes": 3971,
+      "sha256": "bc1133e0c9e16a96e57bd44070e20173e61dba5e691f8a134eba3e6c0c0d3b3f"
+    },
+    {
+      "path": "packages/telegram-gateway/src/telegram-text-format.ts",
+      "bytes": 20124,
+      "sha256": "eea5cc2d8e0006aed55fce143a02fd083c3f44a74b9b8bb5c8e3aacffefd7c0d"
+    },
+    {
+      "path": "packages/telegram-gateway/src/types.ts",
+      "bytes": 2350,
+      "sha256": "14068de87e9f5423d1c0b8f2ccd2166f53178bc29e8bc90b26a4b3739de906c2"
+    },
+    {
+      "path": "packages/telegram-gateway/src/windows-credential-vault.ts",
+      "bytes": 12379,
+      "sha256": "c97cdbeefb56e230c63959d7463b4c53865fd8fe4f2347c15e140790c592c1f3"
+    },
+    {
+      "path": "packages/telegram-gateway/src/wsl-broker-contract.ts",
+      "bytes": 7914,
+      "sha256": "8b547113d5cd405637923a4b76a9027c43e9ea0ca780935dd1076d0d11f9623d"
+    },
+    {
+      "path": "packages/telegram-gateway/src/wsl-broker-guest.ts",
+      "bytes": 4592,
+      "sha256": "630fa862b933d170bc9ece70d28ec1f84699788060c854472e31d701d28faf95"
+    },
+    {
+      "path": "packages/telegram-gateway/src/wsl-broker-host.ts",
+      "bytes": 11866,
+      "sha256": "d877cf6643ae6ad6a19ca4593c86dd52141ddc856fef2f947d5a8a53b6542027"
+    },
+    {
+      "path": "packages/telegram-gateway/src/wsl-broker-snapshot.ts",
+      "bytes": 17623,
+      "sha256": "621cda6a0f4ab4d7afd56894c2cf81fd6fc7cccd70937dca95deedb60133c9d3"
+    },
+    {
+      "path": "packages/telegram-gateway/test/account-binding.test.ts",
+      "bytes": 2392,
+      "sha256": "8d5c29a41aabecc6d4fd64893b4e0169a19a88f20efe787a4fc00b739b244673"
+    },
+    {
+      "path": "packages/telegram-gateway/test/api-contract.test.ts",
+      "bytes": 3160,
+      "sha256": "8b4ee47eff3d9cbe0d882e1f1047eb4c830207928ce79246e702e4e86cb04351"
+    },
+    {
+      "path": "packages/telegram-gateway/test/auth-config.test.ts",
+      "bytes": 1855,
+      "sha256": "d103820fbd03ad3847fb297fbd1811335bc24d9c53b59f65402e97d86fdbc0ec"
+    },
+    {
+      "path": "packages/telegram-gateway/test/auth-options.test.ts",
+      "bytes": 610,
+      "sha256": "7dc34d35c5b4576da7f332642855035438bcea5ec5e63b8611bd89d6199b7e25"
+    },
+    {
+      "path": "packages/telegram-gateway/test/binding-network-fence.test.ts",
+      "bytes": 1093,
+      "sha256": "530934099efc13d2707259187a699ae8bbfd93d0f4cf2f4344e69e65f91b5bde"
+    },
+    {
+      "path": "packages/telegram-gateway/test/bound-action-tools.test.ts",
+      "bytes": 16681,
+      "sha256": "7a8c43cbe023ff0055a175076fc33a4b2dcc3b0d77bb85a20d834c6dba331ca3"
+    },
+    {
+      "path": "packages/telegram-gateway/test/bound-action-transport.test.ts",
+      "bytes": 33253,
+      "sha256": "36ed4ba42f17ec147818cab5d1398b1e2648ceba3381cfbd5f3a42b27e531871"
+    },
+    {
+      "path": "packages/telegram-gateway/test/bound-avatar-primary.test.ts",
+      "bytes": 14020,
+      "sha256": "90efe9ad4f7f8d38d50f9cb044ddcf3972feeab8e669b17f9346c3d4cc460cff"
+    },
+    {
+      "path": "packages/telegram-gateway/test/bound-group-reader.test.ts",
+      "bytes": 17922,
+      "sha256": "6f4750c2fa2a74d468ac49f777dfaa3be40eec1d096512f74264f595b7339c51"
+    },
+    {
+      "path": "packages/telegram-gateway/test/bound-group-tools.test.ts",
+      "bytes": 3748,
+      "sha256": "09d4bbcc413f4bb220b715c6535f229594e1de667e66a8700fe21c07fa1dba0c"
+    },
+    {
+      "path": "packages/telegram-gateway/test/bound-poll-telegram.test.ts",
+      "bytes": 17943,
+      "sha256": "2fd2d69e22dbd14533286f0123783da2458136710099da53b3d243a1968fc31b"
+    },
+    {
+      "path": "packages/telegram-gateway/test/bound-reaction-telegram.test.ts",
+      "bytes": 15585,
+      "sha256": "08949177166d714c138d6b87524b77da3095eeb283f2112ae1a507f9e5c66eac"
+    },
+    {
+      "path": "packages/telegram-gateway/test/config.test.ts",
+      "bytes": 2585,
+      "sha256": "2027ae522a0a390d1afd4dd039838eab0cd3b4f4660b888811104c4c787dc8af"
+    },
+    {
+      "path": "packages/telegram-gateway/test/conversation-references.test.ts",
+      "bytes": 7461,
+      "sha256": "025b8d84826482fd455de1f9dcd18f015e5343aa708cde7a4d2851c2f70a963d"
+    },
+    {
+      "path": "packages/telegram-gateway/test/dialog-match.test.ts",
+      "bytes": 955,
+      "sha256": "3ed87f18f3e83de37b3d319d199e76d915263e9bebc13c07d310221612233eeb"
+    },
+    {
+      "path": "packages/telegram-gateway/test/existing-session-surfaces.test.ts",
+      "bytes": 3493,
+      "sha256": "2517f374f88b858cd484c5aa958d38d39b1f5084d68ea9d13e32416d88a93cfa"
+    },
+    {
+      "path": "packages/telegram-gateway/test/export-crypto.test.ts",
+      "bytes": 2039,
+      "sha256": "e6cd9818a37eb2f091982ad179fdd7523c3daa67099207b4726ada4d58ba9c07"
+    },
+    {
+      "path": "packages/telegram-gateway/test/generated-image-artifact.test.ts",
+      "bytes": 12229,
+      "sha256": "24f754ed0643d51d4a097417ef5b2db78a719e4466d9d6f132f4d5dcf8ec39d4"
+    },
+    {
+      "path": "packages/telegram-gateway/test/generated-image-outbox.test.ts",
+      "bytes": 38144,
+      "sha256": "ac27add97a6182997b327493fc7d60c8ee857dff18704b9262f2d6238a5a9edd"
+    },
+    {
+      "path": "packages/telegram-gateway/test/generated-image-receiver.test.ts",
+      "bytes": 11367,
+      "sha256": "6341d778fa1d287fb1745fbb7fa59098edc06fb5d7cff7fee6c5926689228ef2"
+    },
+    {
+      "path": "packages/telegram-gateway/test/generated-image-telegram.test.ts",
+      "bytes": 25248,
+      "sha256": "9ccc241ffc9a753176c29a6c6141f2bc43a5e1cc4e6eb5a5d1da773fe99750ed"
+    },
+    {
+      "path": "packages/telegram-gateway/test/guardrails.test.ts",
+      "bytes": 2909,
+      "sha256": "5a269ffd7a8e6c6a6ef63ee446b26515115b0ca8b8a70b54509af8f5b3a63fd8"
+    },
+    {
+      "path": "packages/telegram-gateway/test/large-history-packets.test.ts",
+      "bytes": 14205,
+      "sha256": "6dc4944381f9ae0865cb50d0390ff0384aad404afceab51297a7e22f0f60d682"
+    },
+    {
+      "path": "packages/telegram-gateway/test/pilot-conversation-adapter.test.ts",
+      "bytes": 12664,
+      "sha256": "47c926d07b38dcbe4f61c5ff24a3c8db7e5b400ad503eae13d4bb0e4a031e389"
+    },
+    {
+      "path": "packages/telegram-gateway/test/pilot-conversation.test.ts",
+      "bytes": 18322,
+      "sha256": "931886b14cbbd860c791460e831c0102328c441b61f1020ef686b10599ac3723"
+    },
+    {
+      "path": "packages/telegram-gateway/test/pilot-greeting.test.ts",
+      "bytes": 20219,
+      "sha256": "77fe9b966f7b5035dc09022bcb562f89097cb27bcbb3c10e8edec8474f78c1f7"
+    },
+    {
+      "path": "packages/telegram-gateway/test/pilot-outbox.test.ts",
+      "bytes": 41785,
+      "sha256": "708ace8b360402ccf02463984b902930aa3860c4aae1cc5bf0ad29f156df44de"
+    },
+    {
+      "path": "packages/telegram-gateway/test/pilot-telegram-adapter.test.ts",
+      "bytes": 17980,
+      "sha256": "db987ee75f5c66f11a4ffb406ca2c4345052032aff15f6fca00ceb1589f0ee54"
+    },
+    {
+      "path": "packages/telegram-gateway/test/process-lock.test.ts",
+      "bytes": 3487,
+      "sha256": "6d7835ac37e82d606d97d520263382083b2e21822b3c6cb24cc1822e595a2173"
+    },
+    {
+      "path": "packages/telegram-gateway/test/prompt.test.ts",
+      "bytes": 1391,
+      "sha256": "47894518f73d106ad4e0d63ed3c2586f85265c8fd3b4c8ea9670f6ed39444214"
+    },
+    {
+      "path": "packages/telegram-gateway/test/range-export.test.ts",
+      "bytes": 2115,
+      "sha256": "56b97db5ccfbf3a38bf89683082502578f21d25795c6c0727e40c63e1505e71d"
+    },
+    {
+      "path": "packages/telegram-gateway/test/scheduled-text-telegram.test.ts",
+      "bytes": 13100,
+      "sha256": "7ca5d844159f4502e60742dd748ef2a8d2671943bf3ce88a74088a3966870afb"
+    },
+    {
+      "path": "packages/telegram-gateway/test/self-history-reader.test.ts",
+      "bytes": 16991,
+      "sha256": "6577e9bf40507ab68f751c753b417a2f3a80ffa0c5b92ae81787cac60809b2fd"
+    },
+    {
+      "path": "packages/telegram-gateway/test/self-history-task-reader.test.ts",
+      "bytes": 12861,
+      "sha256": "0105c60da4cd6c05b3ffe9464d773dfcca83fd390ad6ff4c25a3d97a9bc13430"
+    },
+    {
+      "path": "packages/telegram-gateway/test/self-history-tool.test.ts",
+      "bytes": 4171,
+      "sha256": "f5d8df1b7f3e812464ed4dc85fb78c4372ede45268bd586a7bfbf652dc50d446"
+    },
+    {
+      "path": "packages/telegram-gateway/test/session-crypto.test.ts",
+      "bytes": 792,
+      "sha256": "c7258ed09406a6bd822e29c3bd6f776c3f2457302efca7507e6d35abf138908a"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-action-journal.test.ts",
+      "bytes": 16337,
+      "sha256": "4956d2471c60e3ba097dc55c607fe2fee90a0f20612f8f523ff15c341bb2eaa5"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-artifact-fetch.test.ts",
+      "bytes": 26387,
+      "sha256": "f48fa9a71b28c2f2aeae659df4de2bd48876b74b5768ceb205ef6594af20cc1a"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-artifact-outbox.test.ts",
+      "bytes": 27780,
+      "sha256": "2c36b02e65a1fcf0da11f803ee7d66fa6f7e53181aeb4d0136be41f09ddc20d1"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-artifact-runtime.test.ts",
+      "bytes": 25429,
+      "sha256": "a0d45a58f499b2c09427dc106faeb51dd89045010d2155eccbd1d43b57f4650b"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-artifact-telegram.test.ts",
+      "bytes": 29868,
+      "sha256": "17bac922a65d909b0d07685d0ada5f97f28d18dfadc498e449f26d97fc05ec00"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-artifact-tools.test.ts",
+      "bytes": 19042,
+      "sha256": "602eae19867d6d53ca10971d1dbfb28c7195ee48a1a1c57dc19c9578b4111b3f"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-artifact.test.ts",
+      "bytes": 10378,
+      "sha256": "72ccdfba38b4b9586901a3ce8d308dab020fa05b2a2171b6b51b14308daf9584"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-background-history-adapter.test.ts",
+      "bytes": 13903,
+      "sha256": "f5a8d11beb053726c0c6e9aa601abeb46ed90342d91b3157fffae64058f4ad4a"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-bound-action-runtime.test.ts",
+      "bytes": 21780,
+      "sha256": "51d412a3c032cf03212f84de5a6083eb734b40e45e12b4d3316c50cac9ab3afc"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-chat-search.test.ts",
+      "bytes": 16506,
+      "sha256": "f884e2f835b1402811864891860276812ef7595b2059e482aa07f50f5e81b7ce"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-chronicle-note.test.ts",
+      "bytes": 21359,
+      "sha256": "40839d25870a89da53cc70d7798051ea730c8b2f15b93d677741e843418ae9fd"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-community-alert-outbox.test.ts",
+      "bytes": 18348,
+      "sha256": "197f3082ef6654259b0c11d53b2d5abd194a113de23e9363df52a2eb2a26f2a9"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-community-assessment-contract.test.ts",
+      "bytes": 5547,
+      "sha256": "7b3b2711afc255b5d7a55db3125a9aea64594b1c12fe486af94341518ac78026"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-community-assessment-port.test.ts",
+      "bytes": 16033,
+      "sha256": "aa833995f8024d46e1422398a830245b19f2861495ddcc6dc790d73da2fb0135"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-community-history-month-coupling.test.ts",
+      "bytes": 19416,
+      "sha256": "a7fdf4873e3943b1179aa24de2128a2c2a7913edf5b63940edd389dfdeb8123c"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-community-observer-state.test.ts",
+      "bytes": 14623,
+      "sha256": "33ad7a92e225ada89ac2eaacf3abcaf64f343665b024b0c1c65e1a8456ca2843"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-community-observer.test.ts",
+      "bytes": 22956,
+      "sha256": "07dd9a7fec4d01675cc67bca345e15628190c57dc46a3743fb1944ef926d2365"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-community-settings.test.ts",
+      "bytes": 7303,
+      "sha256": "9cc95473b99b7d113f2edc2116e8dc9d17105f5475090cfa29508b146b283427"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-context-restoration.test.ts",
+      "bytes": 26574,
+      "sha256": "61717448f5e74640f369f630755377a16f3910b95d00c2e9bf749f2bb7c304fd"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-conversation-adapter.test.ts",
+      "bytes": 178392,
+      "sha256": "2be57c7774e95934f2983a5dd8264f587ce5a440607c8fa7ce73f85e1c565740"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-delivered-chronicle-note.test.ts",
+      "bytes": 15691,
+      "sha256": "77c67509c09bdd398b33e3813d21fedde66fe1bd27685c4882a86d5fe9c2bcd7"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-dialogue-journal.test.ts",
+      "bytes": 21557,
+      "sha256": "73261fed991c9983f211c04b6be7d069fdf2fe67f86cc48860854febe0ab0968"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-epoch-session.test.ts",
+      "bytes": 23501,
+      "sha256": "512dafcafbf8e3eeb3f7bc1511789a5af5462ea0b2e77bac61cc434a8723f10d"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-epoch-wire.test.ts",
+      "bytes": 18000,
+      "sha256": "5bc0d513e40d5f234aad454afe1f3f7117bd7f06f095c180b86cf38e76104a1e"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-group-avatar.test.ts",
+      "bytes": 12018,
+      "sha256": "9711af00bb6ab998cbb38322f2092a1ed4ea7d49949854756193a5ba79648cb1"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-analysis-attempt-coupling.test.ts",
+      "bytes": 7212,
+      "sha256": "cfc15cc3283d21f983832e7b9bbc255f3d1c7156b1a02d791211a8a3c937a3c1"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-analysis-attempt-store.test.ts",
+      "bytes": 46489,
+      "sha256": "843dede17c77cf0e6a9c93a92b5563d00b88f70c3b1b572173f4db4f648ac177"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-analysis-coupling.test.ts",
+      "bytes": 7096,
+      "sha256": "f4ea730c67c74d5853b51020ec9fe5d5450f7f60c105e02600ab0a261313b3a3"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-analysis-planner.test.ts",
+      "bytes": 39881,
+      "sha256": "40f7230094994ef6b612af3c29a6c28cb762c86e0275626ff8df4d4920a6ddc9"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-analysis-runtime.test.ts",
+      "bytes": 28864,
+      "sha256": "24aa9460e84e84a53695fe2c512c9cdc3dc9b183419fe32389434fa35dbdb944"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-analysis-step.test.ts",
+      "bytes": 90299,
+      "sha256": "3d93c76fa92240df676733b753df22cb6da264b3225d2af8ad97102ca3d55b74"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-analysis-store.test.ts",
+      "bytes": 42308,
+      "sha256": "ffcf591030db1b772ce413946f457dd6a5a4200f8ca1ab6c7ec03af4853199ba"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-analysis-view.test.ts",
+      "bytes": 16421,
+      "sha256": "1e2b9e3b881a5a74c05af2be59a7045177a1fbcea88f2d28bb3b0e9bf237b181"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-chronicle-cache.test.ts",
+      "bytes": 25410,
+      "sha256": "d4c00bc6f8b4643ec6749d09a5c4673ec0c55b97b94d31992a7792d22a9547c6"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-control-coupling.test.ts",
+      "bytes": 3323,
+      "sha256": "781caf7d9389c4a95fb2834c8807e600df9e3d14e0d80b0ec53ea6ac105d197b"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-final-report-containment.test.ts",
+      "bytes": 15615,
+      "sha256": "bb9046c8772213ae1435060edbc14aace137355b0f9347a7b1c862a254cffcc5"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-final-report-material.test.ts",
+      "bytes": 7902,
+      "sha256": "5bd58ed4a58de6d75de455b7f3e3d17c73979c98a93d593ef00cd7f43fcbccf5"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-final-report-store.test.ts",
+      "bytes": 8555,
+      "sha256": "95ed84ee52e6bb1d9c19df894cdaf926246f6d8a363ce7bf0b1140cd0c30dc5a"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-final-report.test.ts",
+      "bytes": 26524,
+      "sha256": "6bb2101580834218009060adf1ee682c4acaf81b7eeedafb7ab639bb3093c0bf"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-maintenance-retained-runner.test.ts",
+      "bytes": 22901,
+      "sha256": "d70bbc8819b7e3e93943fdb61e87731004a00590912b09993945ad1c70d8b05f"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-parallel-analysis-runtime.test.ts",
+      "bytes": 25961,
+      "sha256": "9751ffd290c7481de6a7c10c2161f5563195a172902d0f68d0f05c101956d6c1"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-parallel-maintenance.test.ts",
+      "bytes": 12960,
+      "sha256": "a1bb405c89ee2e3012326ba4ca6cfbe3b042720332cf266c2173d49d3782fb07"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-parallel-planner.test.ts",
+      "bytes": 17078,
+      "sha256": "a48ab686d63d3e92d1e9a93847705d1da0d190b8cbd1b26a5bfc492fe0c40613"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-parallel-work-store.test.ts",
+      "bytes": 56633,
+      "sha256": "a68c8c3f8965c31adc04787f1ce5f62a2d8ed2ab03c512596f8b8342b2eb4531"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-period-chronicle.test.ts",
+      "bytes": 25278,
+      "sha256": "fbd6964c0ac61b621a2a3990f979a6e3cd2ee1e39f683f6ab4046fc4967c777b"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-planner-coupling.test.ts",
+      "bytes": 6543,
+      "sha256": "2e15cfc181bea14e3ea63a2a354eaf46ed378a00ad8b6ad043b31fa4a7352988"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-read-runner.test.ts",
+      "bytes": 21034,
+      "sha256": "fc6dcac494c5f37893ada4edbde57e50682051d629846930c065800e1805df76"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-read-step.test.ts",
+      "bytes": 16964,
+      "sha256": "b9aa71ed1d4b642ebfc31bb7fb793bba14cc7d49c485c2a0fa8bfd5b38de94c8"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-scoped-coupling.test.ts",
+      "bytes": 11549,
+      "sha256": "105a79c2e075e6563da8364b5f629556be87e0810e8ed90d0131cc03fb09b9e7"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-source-projection.test.ts",
+      "bytes": 25043,
+      "sha256": "c075fbd6b32d50c118bd70230fb75ec2308609789f18f2dd10972ba21ad6bc07"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-context.test.ts",
+      "bytes": 19847,
+      "sha256": "bff629c64fb8358f7958f12cddcc6b5e911bf01346a2fc0d85cec3ba8f59b127"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-continuation.test.ts",
+      "bytes": 28300,
+      "sha256": "de9f6f9c2f51d59bed46557bd1f17168ad9d43ad2b3b39b755f2c732ac5be699"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-control-store.test.ts",
+      "bytes": 15560,
+      "sha256": "f0b04ca0df5118d0f630fc40ff2a4b917d27e9f3d8034ddc6d6b239d964dcb5f"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-coupling.test.ts",
+      "bytes": 10087,
+      "sha256": "b25b01e16da9561b4e22adc9fcaed52b91443e770f5a4b085b94bd06583b0977"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-delivery-recovery.test.ts",
+      "bytes": 27019,
+      "sha256": "dd98e46554a5b80630c0bf9621c235cf2787964291fe7bee94ec321122a0d09c"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-delivery.test.ts",
+      "bytes": 50878,
+      "sha256": "2c9f0393bbf934112948e768692e4cfd9a65e9d1df2dc0b3a3f49207d836a76f"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-discovery.test.ts",
+      "bytes": 13624,
+      "sha256": "1fe3400c7fe4224fbe478882f66745cfd33176534b67dd13c339d27ccd70074b"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-disposition.test.ts",
+      "bytes": 8820,
+      "sha256": "f9be0f00dc67a45f92857eb7a2eb45930f4fc6f3061ca120fd1677bae83d3187"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-manager.test.ts",
+      "bytes": 35560,
+      "sha256": "000c51cf6cd7df020487e41597d7909760daa6d7b0765f58739d1f7b9a6947d9"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-memory.test.ts",
+      "bytes": 21022,
+      "sha256": "73c3fffef08df63d9abaa61af0da115dda5ec0d23c98eb29c2b3f2f079483fee"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-observer.test.ts",
+      "bytes": 10090,
+      "sha256": "40d5ccd96f4789ba1a4e04c475d2d19a965628fce9499f44db8a2e29afe0bf96"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-reply-lease.test.ts",
+      "bytes": 31416,
+      "sha256": "948bd6a549f9367fe222956202f240003d4048a2478a0b6733d2405177450199"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-request.test.ts",
+      "bytes": 4473,
+      "sha256": "8a70b13abae176b7377e51864906a286df7bd7ae071a761a0fb54c8230695382"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-runner-concurrent.test.ts",
+      "bytes": 20184,
+      "sha256": "11cc5483885c1bcd1d2e22feccdbda930044cf99d0b4ef538da42fe359c24a34"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-runner.test.ts",
+      "bytes": 83193,
+      "sha256": "4f2ba7eb1adb08db6af72a0f27cbf4e1b68a03f582b2bac8dc95e94f08206668"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-runtime.test.ts",
+      "bytes": 16989,
+      "sha256": "047b5f6a2a6a7ca928b46df29c2e3ab9f4c101d45789eef6c5dd16a12d695a5f"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-source-contract.test.ts",
+      "bytes": 11629,
+      "sha256": "f6d52a9dc332f1f785c91392ce0da1a083b414166179cb5c4755a70da68929a3"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-task-store.test.ts",
+      "bytes": 19263,
+      "sha256": "dbb4b3eaf5b57dbe84592f1671897e750dfa8513122820b8ce5e78cb62175037"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-unknown-successor.test.ts",
+      "bytes": 26050,
+      "sha256": "89b9de6428dc7b97aeec7e1f8806b15df2dea962130cff4835d5cea8bcbc31ed"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-history-work-progress.test.ts",
+      "bytes": 1879,
+      "sha256": "eb69862d67482e15ae6bc018a17c6689599a04bbf1940c84e738047ebbab11ea"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-idle-history-adapter.test.ts",
+      "bytes": 19534,
+      "sha256": "36fae2f3de2d761e106f2bed7042082bafd92cc1f6d854a3f359340a7b9b8149"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-idle-history-coupling.test.ts",
+      "bytes": 7847,
+      "sha256": "e6cce5bc658733a8c975a0434276341a2f00d1f0726adf276e324f03bcfe4bd5"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-initiative-adapter.test.ts",
+      "bytes": 20796,
+      "sha256": "71ebd8ae60de2fd6fae89ed5c2ce9a35996c2a998e64e9ada4d33e3ad1566f3f"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-input-image.test.ts",
+      "bytes": 9178,
+      "sha256": "62cd4db03fd8a7e56e8e8a02b10aa2da4af8f2283753e0847368792aedcb096d"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-learning-store.test.ts",
+      "bytes": 16079,
+      "sha256": "d08ec00cacd012a682eac2ccb9dcc00e7d170934dce151456ee0606273437ccf"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-learning-tools.test.ts",
+      "bytes": 10818,
+      "sha256": "a3e6cb40ebc51a5a4f07723cb2f2cd15693883879be3a5df32b9a326dd6c42e0"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-media-context.test.ts",
+      "bytes": 8127,
+      "sha256": "246d0207e2629ad2ec56a7c9b0bc212dcd03188b0a33714e54aae1354b92a0e7"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-media-profile.test.ts",
+      "bytes": 13882,
+      "sha256": "51778bfc48b1f402559b2a1d7f70022ffdb529f81248eec9c35eaa45f6cac82c"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-media-read-port-library.test.ts",
+      "bytes": 3452,
+      "sha256": "1b07fab7f2cae5e47de4eee4c8928c5ed449f9c116592b52e8dc681393238cec"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-media-read-port.test.ts",
+      "bytes": 9774,
+      "sha256": "bab6a4076b8f66ac2bd8221608e303ba3f23dc6234b795d4c1496b81ca3d1254"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-model-input.test.ts",
+      "bytes": 20611,
+      "sha256": "926d4c84a0c22361d15c4efb25026f5c87af32b2af47bb1231fd454dfc738f07"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-model-observation-input.test.ts",
+      "bytes": 8324,
+      "sha256": "85717e980792eb7e1650d52b3b999c16a815914c7c839c50cba9dace7c937a74"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-model-result.test.ts",
+      "bytes": 8315,
+      "sha256": "de0b7a64edb7b9384eb097cb7a292958b737c5f125b9432b241c0985593a07b6"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-multiplex-epoch-wire.test.ts",
+      "bytes": 9005,
+      "sha256": "f4b8d41410a4ae3853f5c8adcd9c139d47a9aadab1f7a803ba730d70256d0756"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-named-tool-dispatcher.test.ts",
+      "bytes": 6265,
+      "sha256": "55f9a92d58e7b55626f6b59133c6e8693e4810a0897764c03943470b241a1cb3"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-native-turn.test.ts",
+      "bytes": 6198,
+      "sha256": "059886191340985bfbe813f0b44865cf430ca98582ea6ff9b9d77e84baa876e2"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-object-catalog.test.ts",
+      "bytes": 19097,
+      "sha256": "d61385423eeeb7d2b6f417b7f9b20ab3dcb106c065a8317ee33409c722678890"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-object-evidence.test.ts",
+      "bytes": 3883,
+      "sha256": "a9744c9bedb440e10207a1aaba0fd8d39ac8d26cfe8f6d96f42af78a3b2307b1"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-observation-tools.test.ts",
+      "bytes": 10943,
+      "sha256": "2c19d2920bb48bdcae80606f4489939382bd37a3dcba30e60d73ad4211178a3c"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-observed-source-action-isolation.test.ts",
+      "bytes": 4286,
+      "sha256": "3e675f1113ac66d02f370b425995c86afd28c6c803369efa4b16b90698afa868"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-observed-source-binding.test.ts",
+      "bytes": 6926,
+      "sha256": "dc95e61f15958385ae5166ddf5b75a66f7e92947f07463f429ba28a01c1510b7"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-observed-source-policy.test.ts",
+      "bytes": 9354,
+      "sha256": "0c33578ce31f3d1cd31d6aa4d481d75b1959d94dba681257e5f1bdfa48105aec"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-observed-source-reader.test.ts",
+      "bytes": 15027,
+      "sha256": "5fb1e4c0985cb502b12d927a5a32195fb5b7e8b16c27b9963ac79c92ba6780f2"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-observed-source-tools.test.ts",
+      "bytes": 8464,
+      "sha256": "a6d032349a49faebf263b65681fb945486a619b26057d36b4adb655488a47081"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-own-action-capture.test.ts",
+      "bytes": 20852,
+      "sha256": "eb787199710503218ddebc384a92432ae544bf7c09b8d9813c0a9dfdb9fee35c"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-own-action-checkpoint.test.ts",
+      "bytes": 16691,
+      "sha256": "d23c80b2dea340c9c2aed98718cc44eed34af562494a3c133dfc8aaf8c6d6a82"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-own-action-memory.test.ts",
+      "bytes": 22584,
+      "sha256": "fb4e2a608d7a6275a3dd0828230fc7ee4954050c174ba8ee4ee7953cef7cb019"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-own-action-projection.test.ts",
+      "bytes": 22837,
+      "sha256": "803a5a22ccfc2a7db5cb4c0c3e54ba7737b19c2d34f23a3b704976605f2fa69d"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-own-action-reader.test.ts",
+      "bytes": 23906,
+      "sha256": "78043425322228091caa35e7089e1ed8acec199968a5d6f4638b0d41eea332bf"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-own-action-recall.test.ts",
+      "bytes": 4511,
+      "sha256": "4e41c073a79254d5f6cc5d684ca7be621bbff6eca90dfa51858e85ef0f90630b"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-parallel-epoch-session.test.ts",
+      "bytes": 27520,
+      "sha256": "bf6de1d45d0b11b35736948e77f3d5fbcd1a135900201a1e974bbd8e7a1cb69b"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-parallel-worker-session.test.ts",
+      "bytes": 18286,
+      "sha256": "ab19619461c5575281e021be47c687d08ab06b3c604bd19c62c4d776ee79f345"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-repository-tools.test.ts",
+      "bytes": 10373,
+      "sha256": "de00a3fe974b85f4a39777b6a1f50e86fd8458cef2c0d8d2f28d38130f6c7d3f"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-scoped-epoch-session.test.ts",
+      "bytes": 31221,
+      "sha256": "72d5c2d0ec10665917324f89de387d6869e98d88d7ad4aa3f7ca15b2331d7cea"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-self-profile.test.ts",
+      "bytes": 14628,
+      "sha256": "b9524f229c18664a8298448e91383fa732f7bdd8485430e70fba4669eb8aa233"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-service-community-observer.test.ts",
+      "bytes": 22666,
+      "sha256": "6c3a5aac4afa148b63d3af387ef2e41e647e59347861e02749144b9efa80a930"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-service-history.test.ts",
+      "bytes": 46052,
+      "sha256": "1b2e83821fe1cfe834cab5c52cdc25096b4f55147afb774ba6f77a38817f3f9e"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-service.test.ts",
+      "bytes": 130823,
+      "sha256": "76c8df2d63384a604e9bcf8ccf5b41e1d05e298bb9882428f51d9953d015748f"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-shared-context-binding.test.ts",
+      "bytes": 7801,
+      "sha256": "630aebe621732900c4c29eda9b22b7be5c51353b30f9011b6f523fea44f4fe1f"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-shared-context-reader.test.ts",
+      "bytes": 17790,
+      "sha256": "3570d9f4b3ed939cb3f4fea6d309d0d8e9535fe78280c797f7734a3ce9f15d72"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-shared-context.test.ts",
+      "bytes": 17099,
+      "sha256": "13f24331f451cea98bab3a1a0a373a89a67afa352113268fbe08a835950c03a4"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-source-archive.test.ts",
+      "bytes": 19820,
+      "sha256": "746bedbc573cba4c3a74d008e5cea9caa6f69bea6b90f392dc0b6ef11e79ba3f"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-source-observer.test.ts",
+      "bytes": 9127,
+      "sha256": "c21ef6ae25f4ac1b2d9f71ace5d8cc6da739a6fd026642471966e795e5f416cf"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-task-shared-context.test.ts",
+      "bytes": 3211,
+      "sha256": "6f09af12772109d49617d9a33d93b6ef2b45ed2cf7c1f9143b75acf9f64dbf33"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-workspace-binding.test.ts",
+      "bytes": 11061,
+      "sha256": "ba40fc7e5ac84c789641b2506a7b3b2f36358ff6e21d314f58849586e75c93a7"
+    },
+    {
+      "path": "packages/telegram-gateway/test/standing-workspace.test.ts",
+      "bytes": 9616,
+      "sha256": "3981f7da79d6079bb6bd243b1c736601d744b59effa1d2664b0b51d6a9731098"
+    },
+    {
+      "path": "packages/telegram-gateway/test/telegram-text-format.test.ts",
+      "bytes": 11442,
+      "sha256": "0d7148cbd5c33db987f9fe3ab04aec78a4b3c9d44a190213d7083e79e29a321d"
+    },
+    {
+      "path": "packages/telegram-gateway/test/windows-credential-vault.test.ts",
+      "bytes": 12861,
+      "sha256": "95347f880318059ddeaa9394ecda03191a1e7adeaabf1b11c85ce78c5e633cb7"
+    },
+    {
+      "path": "packages/telegram-gateway/test/wsl-broker-contract.test.ts",
+      "bytes": 4866,
+      "sha256": "18187d0da62d28ecd28b1a4c58037244d79b7c375746fee0fdc216da42928d74"
+    },
+    {
+      "path": "packages/telegram-gateway/test/wsl-broker-snapshot.test.ts",
+      "bytes": 12088,
+      "sha256": "ed6079a05a637488a012c280563bf225d74a7215cfe7f2a1ac38b5faab8922e3"
+    },
+    {
+      "path": "packages/telegram-gateway/test/wsl-broker-surface.test.ts",
+      "bytes": 20995,
+      "sha256": "82832ce2fbcee6b2a5a7f40a0a74298f503bbbbc12a68fca0035f1d66b92067b"
+    },
+    {
+      "path": "packages/telegram-gateway/tsconfig.json",
+      "bytes": 490,
+      "sha256": "f97c94f4f2e1eaa663f6b5d94afb9ca582317b2ca8d841e26b3fb4bd6a034d78"
+    },
+    {
+      "path": "project/verification/NeurobroBackground.cs",
+      "bytes": 3148,
+      "sha256": "9c75b7d6d797fddae28e82a8fe838b841a09b16ec7304571ddb84648038b553e"
+    },
+    {
+      "path": "project/verification/history-parallel-native-adapter.py",
+      "bytes": 11167,
+      "sha256": "b4364205dc8794b079b8c4d1cd620e7a4b2169a968c1adc5a8b50aa0b47bb027"
+    },
+    {
+      "path": "project/verification/history-parallel-native-adapter.test.py",
+      "bytes": 18018,
+      "sha256": "a285fb3a5648dc1cceab7a68d3b95cd14e12964ae36af6cabb7deb2ed741f83b"
+    },
+    {
+      "path": "project/verification/history-parallel-native-client.py",
+      "bytes": 4806,
+      "sha256": "4eb64245bee24977f174fcb3c825d39cd17dba4f0f8cc3c7a758ef1fbbad5545"
+    },
+    {
+      "path": "project/verification/history-parallel-native-client.test.py",
+      "bytes": 9573,
+      "sha256": "34d5650847183f8eb25c8c2ff75636aaa9c4f2dc55cb76d2f5f73ec15cc6d3f0"
+    },
+    {
+      "path": "project/verification/history-parallel-native-host.test.mjs",
+      "bytes": 5770,
+      "sha256": "78cedaad20060d7403a6e0b22fb08492c5244652f72d90f3a18523131d10c0f6"
+    },
+    {
+      "path": "project/verification/history-parallel-native-pool.py",
+      "bytes": 30499,
+      "sha256": "0596359b6e6e3fe6475ee293c3ef9ae9d9a17ce95860d2a32228bb6f00ad0e4e"
+    },
+    {
+      "path": "project/verification/history-parallel-native-pool.test.py",
+      "bytes": 23721,
+      "sha256": "0834d71d7917281f3f93c2da432435003ff812fb0690c5c6a813dcfa6507d6bd"
+    },
+    {
+      "path": "project/verification/history-parallel-native-session.py",
+      "bytes": 25507,
+      "sha256": "edc898c1dd001aab502e9098dca862039f4b8060fb37b38508d4ae97cb0b591c"
+    },
+    {
+      "path": "project/verification/history-parallel-native-session.test.py",
+      "bytes": 28844,
+      "sha256": "6e27270577d0a774c9cdd17f951d2a9a05100a46d9cae65420c9ae3b53da7380"
+    },
+    {
+      "path": "project/verification/history-parallel-native-supervisor.test.py",
+      "bytes": 25818,
+      "sha256": "6296494186c207fb5e5a937d9d5541267367cc75ae553eded98e74468cca0c69"
+    },
+    {
+      "path": "project/verification/history-parallel-native-wire.test.py",
+      "bytes": 2517,
+      "sha256": "98154c8844ff05d9797fa650d1a2b64e005bcf31c02c74338e027b666deed8ec"
+    },
+    {
+      "path": "project/verification/rm-0032-astra-canary-client.py",
+      "bytes": 32349,
+      "sha256": "43e9422897b97ce4dc9aacd40494e94d89fd770ad84b9e6361666a6f70d3d967"
+    },
+    {
+      "path": "project/verification/rm-0032-astra-canary-client.test.py",
+      "bytes": 17954,
+      "sha256": "4cf5b11b101c266a8b106f12738f45da11d90635f829a3d47e8da3ba25ba22f5"
+    },
+    {
+      "path": "project/verification/rm-0032-managed-custody-client.py",
+      "bytes": 22575,
+      "sha256": "6a5f187c701708830b8556465ddea0142196250302a1062c6e343c3f7ba598e9"
+    },
+    {
+      "path": "project/verification/rm-0032-managed-custody-client.test.py",
+      "bytes": 12368,
+      "sha256": "bd36ed65a80b2928382fd1556ef630cd43dbbcbce52cb65c7fbbc17d2c32cc3c"
+    },
+    {
+      "path": "project/verification/rm-0032-managed-custody-host.mjs",
+      "bytes": 4420,
+      "sha256": "36cb11ed1b3339fde268482dd840ae83ada25715a27c3c3689a0a897aa3200e7"
+    },
+    {
+      "path": "project/verification/rm-0032-managed-custody-supervisor.py",
+      "bytes": 11733,
+      "sha256": "feb8522b2cfdd87c8121221b95287a1a5cb5c27938126b7fdfd5c097040639c0"
+    },
+    {
+      "path": "project/verification/rm-0032-managed-custody-supervisor.test.py",
+      "bytes": 5101,
+      "sha256": "bd65afbca19bc67764d70bbaf06448c44db6a311cc81c6ec348c839d5be4cf9b"
+    },
+    {
+      "path": "project/verification/rm-0032-model-egress-relay.py",
+      "bytes": 13143,
+      "sha256": "c46f4136c37b1154b1e8178b3e5989844e1a2b47fb8e38e8a344361e5d077a7e"
+    },
+    {
+      "path": "project/verification/rm-0032-model-egress-relay.test.py",
+      "bytes": 15344,
+      "sha256": "cab50377d54002d88bc6c7219e263d2d72d59b875adc9bc22d643626c13eb1f9"
+    },
+    {
+      "path": "project/verification/rm-0032-native-canary-client.py",
+      "bytes": 26512,
+      "sha256": "68e7a3f084f95ca7499e69942e2c59e3b4e8dcb05756437d33d0a73da522986d"
+    },
+    {
+      "path": "project/verification/rm-0032-native-canary-client.test.py",
+      "bytes": 23025,
+      "sha256": "b2f050d8c53122cf56499f7618ec71f5a5f7e16c5fe8cd12e320f5b0a8980b90"
+    },
+    {
+      "path": "project/verification/rm-0032-native-conversation.py",
+      "bytes": 47438,
+      "sha256": "275ecba0707727ea876e9d0f1b4998f1fdedb4b9f5af28d01c96a56d1cbbd7e5"
+    },
+    {
+      "path": "project/verification/rm-0032-native-conversation.test.py",
+      "bytes": 66685,
+      "sha256": "53e5b050cfe984b2302ac7c52cad4b9285eb91dc4eebd05eabbb97851ad8d2d9"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-fixture.py",
+      "bytes": 3274,
+      "sha256": "01ee7b8c71393486b92157d92410709271a6a4c3aba22733fa2224c210af57c6"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-idle.py",
+      "bytes": 18563,
+      "sha256": "1255e5d9003cb68db7d08d4061073a44de4169fc507b905957890b9b4f7e0052"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-idle.test.py",
+      "bytes": 21539,
+      "sha256": "daccc719c5964d26f57ba5d74105c63099656ec9b4a7c2599b91c2b30f73350b"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-managed-rpc.py",
+      "bytes": 19359,
+      "sha256": "41cfe0add7071561d941d301006b89ae55c105d064b793ab32b4a0858a125c95"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-managed-rpc.test.py",
+      "bytes": 13889,
+      "sha256": "c2d666eeb1dd1e8df9502abfa67816e6e5d102a39b734ccdbea6898c5c0cf5e5"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-rpc.py",
+      "bytes": 4611,
+      "sha256": "66f8087f2db9c6b8f804ff30a98529c82acda17d7605e71e52fee2f4d6cc77b5"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-rpc.test.py",
+      "bytes": 14618,
+      "sha256": "d6742c0f136adca96168b9f745fa391dc7ec91dda29bb851908a34e91f6d439e"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-session.fixture.py",
+      "bytes": 7909,
+      "sha256": "716ea0fd491ff53c6ecfb9677c4980ff4bdfdd8686ae0b0e41c546efed74ca26"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-session.py",
+      "bytes": 32403,
+      "sha256": "45e7e3f3b6021385afdc66a61f7831de20302c14092d985f2e8aea7b8013134b"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-session.test.py",
+      "bytes": 21687,
+      "sha256": "66a9bb595ace93ac7288f27bf098727295d0ee43c2d43c5fd3690a23184cef1d"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-wire.py",
+      "bytes": 12123,
+      "sha256": "ffc597983104aadaf986e940edae7434960ae09451683dcafe3256d12740e96a"
+    },
+    {
+      "path": "project/verification/rm-0032-native-epoch-wire.test.py",
+      "bytes": 14500,
+      "sha256": "1d09034b2c80502e208d89f25114ea3a381eec65bf5e1874695a0c9e1392c4f9"
+    },
+    {
+      "path": "project/verification/rm-0032-native-history-fixture.py",
+      "bytes": 3882,
+      "sha256": "c1f65e035f71b1aec993eb3c81d52079ce10405a403aacddf756af7668a113f4"
+    },
+    {
+      "path": "project/verification/rm-0032-native-image-canary-client.py",
+      "bytes": 30531,
+      "sha256": "120d06651b4a6c95d0699ee54f737c3c4885381c01217260eecb6f96c764bcb9"
+    },
+    {
+      "path": "project/verification/rm-0032-native-image-canary-client.test.py",
+      "bytes": 15468,
+      "sha256": "145ea5f4a7dce28d7e5f1ffd3c684100b91f5bd49a7217a4cbc8212f6c45859f"
+    },
+    {
+      "path": "project/verification/rm-0032-native-image-collector.py",
+      "bytes": 13407,
+      "sha256": "7c9b3f3c11b9ba08399b6c63e1727dbfad7a25aa39e6d7294ba6a9ed2397ac76"
+    },
+    {
+      "path": "project/verification/rm-0032-native-image-collector.test.py",
+      "bytes": 13384,
+      "sha256": "0ed5e441513feebaec9f8e2bdf08fa9edf19d04f833491b746b6d14dc5eaa9c0"
+    },
+    {
+      "path": "project/verification/rm-0032-native-image-conversation.py",
+      "bytes": 10257,
+      "sha256": "f21bb675102c9d6a2bdd905bcba0708966ddeb0eb77b30b4eed2b09fbd1f2971"
+    },
+    {
+      "path": "project/verification/rm-0032-native-image-conversation.test.py",
+      "bytes": 13289,
+      "sha256": "2296747fc6e68d5d4a8c745a95085e33f4bdd6c7c1caa95c95b4a557c9788271"
+    },
+    {
+      "path": "project/verification/rm-0032-native-image-epoch.py",
+      "bytes": 20689,
+      "sha256": "b308337ffb5dbd10fff6ffc6df95bed37b507c6d7428cab0d8810d9cbf4a9812"
+    },
+    {
+      "path": "project/verification/rm-0032-native-image-epoch.test.py",
+      "bytes": 27306,
+      "sha256": "7cb5d6dda19478649aa487f4241e639724a6820e6c59834a4a6b25c505d5ea5e"
+    },
+    {
+      "path": "project/verification/rm-0032-native-pipe.py",
+      "bytes": 7119,
+      "sha256": "70e578bcc2397da75bfee903c3e169e6ef53d489314d24e72b36ac396d884b8e"
+    },
+    {
+      "path": "project/verification/rm-0032-native-pipe.test.py",
+      "bytes": 7149,
+      "sha256": "42b348f1990d919b1683d0ef02c3355c3f0ddb2c1af3db050797fd5a845e6c77"
+    },
+    {
+      "path": "project/verification/rm-0032-native-rpc-conversation.integration.py",
+      "bytes": 5049,
+      "sha256": "7e2635515f8d08110237ca0826386ce19c545a665f927f5baa7841c70697067a"
+    },
+    {
+      "path": "project/verification/rm-0032-native-rpc.py",
+      "bytes": 20474,
+      "sha256": "2a7f04c392b7bc5cb81165c02e27f8d04ef6f400cb464bf3f91c378a8f23d720"
+    },
+    {
+      "path": "project/verification/rm-0032-native-rpc.test.py",
+      "bytes": 24287,
+      "sha256": "4d881a10c677bde8044e9c58ed04de1594840c387b209ce4c724ccdc91ca9f5a"
+    },
+    {
+      "path": "project/verification/rm-0032-native-scoped-epoch-pipes.test.py",
+      "bytes": 14186,
+      "sha256": "f755ad203ce7e4dfcbf84c82d3ae659227e97139011908c470a92d4e4b22f8d7"
+    },
+    {
+      "path": "project/verification/rm-0032-native-scoped-epoch.test.py",
+      "bytes": 27347,
+      "sha256": "0994c01caceb2fc0688f55af0ea9f27dedd60feddf77f18906953314acd1eb2f"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-dialogues.mjs",
+      "bytes": 6138,
+      "sha256": "125f4dd8efaf4d2073de9c47064867f1442faba76cf99a60db79e65c6cbd4e16"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-dialogues.test.mjs",
+      "bytes": 3650,
+      "sha256": "22873da7d20adefbdecbc27d58ae2ca2a275dda7903151d94018e4a84029cca0"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-client.py",
+      "bytes": 131746,
+      "sha256": "459a07ab9ec4a395cfe1334dde7a41126c04866fc232c78babebcd1bc0b1c2bb"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-client.test.py",
+      "bytes": 87142,
+      "sha256": "99ce023469dd94fa2dfde04c1070e5db4742c541aa7d003e6002926026228762"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-diagnostics-fixture.mjs",
+      "bytes": 6485,
+      "sha256": "a139377e6be4a4cdeaac746c7d780e9ee3ca05dadd40bd506d78f4dd4ede986d"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-host.mjs",
+      "bytes": 11547,
+      "sha256": "cad1513a8cd3383727871ecbde3940f3c8f67696c9925d709ec563078fc3dda2"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-host.test.mjs",
+      "bytes": 10771,
+      "sha256": "045774ad363d12c967a6913943352b9c3d6b24b484bcdf11334f5b6db4f955cd"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-owner.mjs",
+      "bytes": 24459,
+      "sha256": "e552c50dde641d0c0515a1e6624bfedbf4579182ca73359d9f22bec88c92c1e5"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-owner.test.mjs",
+      "bytes": 55228,
+      "sha256": "4e134dc1f97f73bd9b63a789a2eda45729b8c34a1543ec0042b966424665f45f"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-receipt.mjs",
+      "bytes": 38716,
+      "sha256": "1746991f5207a7ad7d0e47b5864003e82295bb752f389d851f27ddb0eb2f2c55"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-receipt.test.mjs",
+      "bytes": 15152,
+      "sha256": "4e23fa9097c726d5404c06719eede278675a04a200c50959f2db49271da3cabe"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-recovery.mjs",
+      "bytes": 8317,
+      "sha256": "f2e475866839424bd9fbf7668f577fdd8e6803a46639bb68bec8112faa89964e"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-recovery.test.mjs",
+      "bytes": 5380,
+      "sha256": "f42ca2a6547a7931e83c1501ee6fcd0b14007fd507d2dddf5f7d37c31546478b"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-runtime.mjs",
+      "bytes": 33148,
+      "sha256": "1f385bca27d060b4ea69da0d6e207f2243181460ebe145d2a038dd7ceccd591e"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-runtime.test.mjs",
+      "bytes": 34447,
+      "sha256": "c20189533b9141cb3406b00efe8b6feaab14e1b314b466401b17774e51418008"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-service.integration.test.mjs",
+      "bytes": 14914,
+      "sha256": "0255f58f08476953ed04fcba894d656d061945a7810815c859321750abeb1fc6"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-supervisor-linux-test.py",
+      "bytes": 5677,
+      "sha256": "7919f5db859222cd06ecb31f64a3af95e581c5640fd976375558119b68e6a439"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-supervisor.py",
+      "bytes": 69565,
+      "sha256": "cb3427af5e65bbcd26c3b5e57f319d7c3b6025dd3d22bb3b5f8d3e0144e48917"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-epoch-supervisor.test.py",
+      "bytes": 50345,
+      "sha256": "06ab4a8f936247264e1c9119969aafc44913f110153b94ed5e184c3299f71260"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-host.mjs",
+      "bytes": 44633,
+      "sha256": "072b5f74238baed120160b8437ef0703c541f48871d8b5ff1bd634ee33e1a324"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-host.test.mjs",
+      "bytes": 34248,
+      "sha256": "fd61f0e0b28ddfb565b6dbe734c4dd6797889418c21265ac41d6111adccac0f4"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-image-client.py",
+      "bytes": 23662,
+      "sha256": "fd8dc1ada5571d51c5eb77866ec64378d8bfce187a6f8c04702175a6c7c88205"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-parallel-runtime.mjs",
+      "bytes": 34652,
+      "sha256": "3a6a15c542bb407ccee0245d1a4f28356ff44482125ff94dfd2a5be55c8e80b5"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-parallel-runtime.test.mjs",
+      "bytes": 45593,
+      "sha256": "74dcb5310cf139800d5e2e664e6e34fe225c750f6327e69add9871a1812c5f9b"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-scoped-client.test.py",
+      "bytes": 30463,
+      "sha256": "3f7e0738234e0dd855c4c11316bbc99d402595cf6dc53c71f047fb9fb2534ab4"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-scoped-runtime-fixture.mjs",
+      "bytes": 10449,
+      "sha256": "b58d7109f2263d55017238ccc6ca00ed0ecfbe841addf15bd48627abd24a4b04"
+    },
+    {
+      "path": "project/verification/rm-0032-standing-task.ps1",
+      "bytes": 21112,
+      "sha256": "65b2d7161bdfaee55dfdba587790517b00e980c0ce7abdb6046c78bf8638f5e8"
+    }
+  ]
+}
